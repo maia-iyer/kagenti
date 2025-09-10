@@ -65,7 +65,7 @@ async def _fetch_agent_card_with_resolver(
             f"Attempting to fetch agent card from path: {relative_card_path} on base URL: {base_url}"
         )
 
-        http_kwargs = {"headers": auth_headers} if auth_headers else {}
+        http_kwargs = auth_headers if auth_headers else {}
         agent_card: AgentCard = await resolver.get_agent_card(
             relative_card_path=relative_card_path, http_kwargs=http_kwargs
         )
@@ -101,8 +101,13 @@ async def get_effective_agent_card(st_object, base_url: str) -> AgentCard | None
     Returns the most appropriate card (extended if available, otherwise public).
     """
     async with httpx.AsyncClient() as client:
+        http_kwargs = {}
+        if TOKEN_STRING in st.session_state:
+            if ACCESS_TOKEN_STRING in st.session_state[TOKEN_STRING]:
+                bearer_token = st.session_state[TOKEN_STRING][ACCESS_TOKEN_STRING]
+                http_kwargs = {"headers": {"Authorization": f"Bearer {bearer_token}"}}
         public_card = await _fetch_agent_card_with_resolver(
-            st_object, client, base_url, constants.A2A_PUBLIC_AGENT_CARD_PATH
+            st_object, client, base_url, constants.A2A_PUBLIC_AGENT_CARD_PATH, http_kwargs
         )
 
         if not public_card:
@@ -121,7 +126,7 @@ async def get_effective_agent_card(st_object, base_url: str) -> AgentCard | None
                 client,
                 base_url,
                 constants.A2A_EXTENDED_AGENT_CARD_PATH,
-                auth_headers,
+                http_kwargs,
             )
             if extended_card:
                 logger.info("Using AUTHENTICATED EXTENDED agent card.")
