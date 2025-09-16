@@ -43,7 +43,13 @@ data:
       {
         "name": "CLIENT_SECRET",
         "valueFrom": {"secretKeyRef": {"name": "slack-agent-client-secret", "key": "client-secret"}}
-      }
+      },
+      {
+        "name": "JWKS_URL",
+        "value": "http://keycloak.keycloak.svc.cluster.local:8080/realms/master/protocol/openid-connect/certs"
+      },
+      {"name": "AUDIENCE", "value": "spiffe://localtest.me/sa/slack-tool"},
+      {"name": "ISSUER", "value": "http://keycloak.localtest.me:8080/realms/master"}
     ]
   mcp-slack-config: |
     [

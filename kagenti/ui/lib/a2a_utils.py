@@ -52,7 +52,7 @@ async def _fetch_agent_card_with_resolver(
     httpx_client: httpx.AsyncClient,
     base_url: str,
     relative_card_path: str,
-    auth_headers: dict = None,
+    http_kwargs: dict = {},
 ) -> AgentCard | None:
     """Helper to fetch an agent card using A2ACardResolver."""
     try:
@@ -65,7 +65,6 @@ async def _fetch_agent_card_with_resolver(
             f"Attempting to fetch agent card from path: {relative_card_path} on base URL: {base_url}"
         )
 
-        http_kwargs = auth_headers if auth_headers else {}
         agent_card: AgentCard = await resolver.get_agent_card(
             relative_card_path=relative_card_path, http_kwargs=http_kwargs
         )
