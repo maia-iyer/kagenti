@@ -75,6 +75,10 @@ data:
         "value": "http://keycloak.keycloak.svc.cluster.local:8080/realms/master/protocol/openid-connect/certs"
       },
       {
+        "name": "AUDIENCE",
+        "value": "spiffe://localtest.me/sa/slack-tool"
+      },
+      {
         "name": "ADMIN_SLACK_BOT_TOKEN",
         "valueFrom": {"secretKeyRef": {"name": "slack-secret", "key": "admin-bot-token"}}
       },
