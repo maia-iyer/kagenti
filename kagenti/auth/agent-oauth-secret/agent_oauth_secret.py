@@ -52,7 +52,7 @@ def read_keycloak_credentials(
     password_key: str,
 ) -> Tuple[str, str]:
     """Read Keycloak admin credentials from a Kubernetes secret.
-    
+
     Wrapper around common.read_keycloak_credentials that uses typer for output.
     """
     try:
@@ -71,7 +71,7 @@ def read_keycloak_credentials(
 
 def configure_ssl_verification(ssl_cert_file: Optional[str]) -> Optional[str]:
     """Configure SSL verification based on certificate file availability.
-    
+
     Wrapper around common.configure_ssl_verification that uses typer for output.
     """
     if ssl_cert_file:
@@ -84,7 +84,7 @@ def configure_ssl_verification(ssl_cert_file: Optional[str]) -> Optional[str]:
                 fg="yellow",
             )
             return None
-    
+
     typer.echo("No SSL_CERT_FILE provided - using system CA bundle for verification")
     return None
 
