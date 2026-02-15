@@ -3498,6 +3498,58 @@ def run_self_test():
 
 
 # ---------------------------------------------------------------------------
+# Full Pipeline
+# ---------------------------------------------------------------------------
+
+
+def phase_full_pipeline(args):
+    """Run all phases in sequence: stats -> mermaid -> comment -> summary."""
+    if not args.session_id:
+        print("ERROR: --session-id required for full pipeline", file=sys.stderr)
+        sys.exit(1)
+    if not all([args.target, args.number, args.repo]):
+        print(
+            "ERROR: --target, --number, --repo required for full pipeline",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print("=" * 60)
+    print("Phase 1/4: Stats")
+    print("=" * 60)
+    phase_stats(args)
+
+    # Set stats file for subsequent phases if not set
+    if not args.stats_file:
+        args.stats_file = os.path.join(
+            args.output_dir, f"{args.session_id[:8]}-stats.json"
+        )
+
+    print()
+    print("=" * 60)
+    print("Phase 2/4: Mermaid")
+    print("=" * 60)
+    phase_mermaid(args)
+
+    print()
+    print("=" * 60)
+    print("Phase 3/4: Comment")
+    print("=" * 60)
+    phase_comment(args)
+
+    print()
+    print("=" * 60)
+    print("Phase 4/4: Summary")
+    print("=" * 60)
+    phase_summary(args)
+
+    print()
+    print("=" * 60)
+    print("Pipeline complete")
+    print("=" * 60)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -3510,8 +3562,9 @@ def main():
         return
 
     if not args.phase:
-        print("ERROR: --phase is required (or use --self-test)", file=sys.stderr)
-        sys.exit(1)
+        # Full pipeline: stats -> mermaid -> comment -> summary
+        phase_full_pipeline(args)
+        return
 
     if args.phase == "stats":
         phase_stats(args)
@@ -3524,7 +3577,11 @@ def main():
     elif args.phase == "extract":
         phase_extract(args)
     elif args.phase == "dashboard":
-        phase_placeholder(args.phase, args)
+        # Dashboard is generated as part of extract phase
+        print("Dashboard is generated via --phase extract (produces CSV + MD + HTML)")
+        print(
+            "Run: python3 session-analytics.py --phase extract --repo OWNER/NAME --output-dir /tmp/kagenti/session/"
+        )
     else:
         print(f"ERROR: unknown phase '{args.phase}'", file=sys.stderr)
         sys.exit(1)
