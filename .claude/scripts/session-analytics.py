@@ -3,7 +3,7 @@
 
 Pipeline phases:
   stats     - Parse JSONL, extract token usage, tools, costs -> JSON
-  mermaid   - Generate workflow diagram from stats (placeholder)
+  mermaid   - Generate annotated workflow diagrams from stats + SKILL.md templates
   comment   - Post PR/issue comment with session summary (placeholder)
   summary   - Generate human-readable summary (placeholder)
   extract   - Export sessions to CSV/MD/HTML (placeholder)
@@ -472,6 +472,292 @@ def phase_stats(args):
 
 
 # ---------------------------------------------------------------------------
+# Phase: mermaid - annotated workflow diagrams
+# ---------------------------------------------------------------------------
+
+# Keywords in edge labels that indicate failure paths
+FAILURE_KEYWORDS = re.compile(
+    r"fail|error|stuck|reject|crash|timeout|broken|"
+    r"changes needed|issues|no\b|can.t|cannot|inconclusive|"
+    r"3\+\s*failures",
+    re.IGNORECASE,
+)
+
+# Edge / node colors for mermaid annotation
+COLOR_GREEN = "#4CAF50"  # traversed successfully
+COLOR_RED = "#F44336"  # error/failure path traversed
+COLOR_GREY = "#9E9E9E"  # not traversed (unused)
+
+NODE_STYLE_USED = "fill:#C8E6C9,stroke:#4CAF50,stroke-width:3px"
+
+# Regex pattern for mermaid edges (reused from tdd-debug-diagram.py)
+EDGE_PATTERN = re.compile(
+    r"(\b[A-Z][A-Z0-9_]*\b)\s*(--[->.]*)(\|([^|]*)\|)?\s*(\b[A-Z][A-Z0-9_]*\b)"
+)
+
+
+def extract_mermaid_from_skill(skill_path):
+    """Extract the first mermaid code block from a SKILL.md file.
+
+    Returns the mermaid content as a string, or None if not found.
+    """
+    if not os.path.isfile(skill_path):
+        return None
+
+    with open(skill_path, "r") as f:
+        content = f.read()
+
+    # Match ```mermaid ... ``` block
+    match = re.search(r"```mermaid\s*\n(.*?)```", content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def find_skill_workflow(skill_name, skills_dir):
+    """Find and return a workflow mermaid template for a skill.
+
+    Search order:
+    1. <skills_dir>/<skill_name>/SKILL.md
+    2. If skill has colon notation (e.g., tdd:ci), try parent: <skills_dir>/tdd/SKILL.md
+    """
+    skills_path = Path(skills_dir)
+
+    # Try exact skill directory first
+    exact_path = skills_path / skill_name / "SKILL.md"
+    mermaid = extract_mermaid_from_skill(str(exact_path))
+    if mermaid:
+        return mermaid
+
+    # Try parent skill (for colon notation like tdd:ci -> tdd)
+    if ":" in skill_name:
+        parent = skill_name.split(":")[0]
+        parent_path = skills_path / parent / "SKILL.md"
+        mermaid = extract_mermaid_from_skill(str(parent_path))
+        if mermaid:
+            return mermaid
+
+    return None
+
+
+def find_edges(lines):
+    """Parse edges from mermaid lines.
+
+    Returns list of dicts: {index, line, src, dst, label, is_failure}
+    Reuses the pattern from tdd-debug-diagram.py.
+    """
+    edges = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(("classDef", "style", "%%", "linkStyle")):
+            continue
+        m = EDGE_PATTERN.search(line)
+        if m:
+            label = m.group(4) or ""
+            label_clean = label.strip().strip('"')
+            is_failure = bool(FAILURE_KEYWORDS.search(label_clean))
+            edges.append(
+                {
+                    "index": len(edges),
+                    "line": i,
+                    "src": m.group(1),
+                    "dst": m.group(5),
+                    "label": label_clean,
+                    "is_failure": is_failure,
+                }
+            )
+    return edges
+
+
+def annotate_mermaid(template, edge_counts, used_nodes):
+    """Apply colors and traversal counters to a mermaid template.
+
+    Args:
+        template: mermaid diagram string
+        edge_counts: dict mapping "SRC->DST" -> count
+        used_nodes: set of node IDs that were used (appear in traversed edges
+                    or were invoked as skills)
+
+    Returns:
+        Annotated mermaid string with colored edges, counters, and node styles.
+    """
+    lines = template.splitlines()
+
+    # Parse edges from the template
+    edges = find_edges(lines)
+
+    # Build set of traversed edge pairs
+    traversed = set()
+    for edge_key, count in edge_counts.items():
+        if count > 0 and "->" in edge_key:
+            parts = edge_key.split("->")
+            if len(parts) == 2:
+                traversed.add((parts[0].strip(), parts[1].strip()))
+
+    # Update edge labels with traversal counts
+    for edge_key, count in edge_counts.items():
+        if count <= 0:
+            continue
+        parts = edge_key.split("->")
+        if len(parts) != 2:
+            continue
+        src, dst = parts[0].strip(), parts[1].strip()
+
+        for i, line in enumerate(lines):
+            pattern = rf"(\b{re.escape(src)}\b\s*)(--[->.]*)(\|[^|]*\|)?(\s*{re.escape(dst)}\b)"
+            m = re.search(pattern, line)
+            if m:
+                count_str = f"{count}x"
+                old_label = m.group(3)
+                if old_label:
+                    inner = old_label.strip("|").strip().strip('"')
+                    new_label = f'|"{inner} ({count_str})"|'
+                else:
+                    new_label = f'|"{count_str}"|'
+
+                new_line = (
+                    line[: m.start()]
+                    + m.group(1)
+                    + m.group(2)
+                    + new_label
+                    + line[m.start(4) :]
+                )
+                lines[i] = new_line
+                break
+
+    # Build linkStyle directives to color edges
+    link_styles = []
+    for edge in edges:
+        key = (edge["src"], edge["dst"])
+        if key in traversed:
+            color = COLOR_RED if edge["is_failure"] else COLOR_GREEN
+        else:
+            color = COLOR_GREY
+
+        link_styles.append(
+            f"    linkStyle {edge['index']} stroke:{color},stroke-width:2px"
+        )
+
+    # Build style directives for used nodes
+    node_styles = []
+    for node_id in sorted(used_nodes):
+        # Check the node actually appears in the template
+        node_in_template = any(
+            re.search(rf"\b{re.escape(node_id)}\b", line)
+            for line in lines
+            if not line.strip().startswith(("classDef", "style", "%%", "linkStyle"))
+        )
+        if node_in_template:
+            node_styles.append(f"    style {node_id} {NODE_STYLE_USED}")
+
+    # Insert linkStyle and node style directives before classDef lines
+    insert_idx = len(lines)
+    for i, line in enumerate(lines):
+        if line.strip().startswith(("classDef", "style ")):
+            insert_idx = i
+            break
+
+    for j, style in enumerate(link_styles + node_styles):
+        lines.insert(insert_idx + j, style)
+
+    return "\n".join(lines)
+
+
+def phase_mermaid(args):
+    """Generate annotated mermaid workflow diagrams from session stats."""
+    if not args.stats_file:
+        print("ERROR: --stats-file is required for mermaid phase", file=sys.stderr)
+        sys.exit(1)
+
+    stats_path = Path(args.stats_file)
+    if not stats_path.is_file():
+        print(f"ERROR: stats file not found: {stats_path}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(stats_path) as f:
+        stats = json.load(f)
+
+    # Determine skills directory
+    if args.skills_dir:
+        skills_dir = args.skills_dir
+    else:
+        # Try to infer from the script location
+        script_dir = Path(__file__).resolve().parent
+        skills_dir = str(script_dir.parent / "skills")
+
+    if not os.path.isdir(skills_dir):
+        print(f"WARNING: skills directory not found: {skills_dir}", file=sys.stderr)
+
+    # Collect skills to process: skills_invoked + skills from workflow_edges
+    skill_names = set()
+    for s in stats.get("skills_invoked", []):
+        skill_names.add(s["skill"])
+
+    workflow_edges = stats.get("workflow_edges", {})
+    # workflow_edges might be keyed by skill name
+    for skill_key in workflow_edges:
+        skill_names.add(skill_key)
+
+    # Also collect any skill-like names from edge keys in workflow_edges
+    # (workflow_edges can be flat: {"SRC->DST": count} or nested: {"skill": {"SRC->DST": count}})
+    flat_edges = {}
+    nested_edges = {}
+    for key, value in workflow_edges.items():
+        if isinstance(value, dict):
+            nested_edges[key] = value
+        elif isinstance(value, (int, float)):
+            flat_edges[key] = int(value)
+
+    diagrams = {}
+
+    for skill_name in skill_names:
+        template = find_skill_workflow(skill_name, skills_dir)
+        if not template:
+            print(
+                f"  No workflow template found for skill: {skill_name}",
+                file=sys.stderr,
+            )
+            continue
+
+        # Get edge counts for this skill
+        edge_counts = nested_edges.get(skill_name, flat_edges)
+
+        # Collect used nodes from traversed edges
+        used_nodes = set()
+        for edge_key, count in edge_counts.items():
+            if count > 0 and "->" in edge_key:
+                parts = edge_key.split("->")
+                if len(parts) == 2:
+                    used_nodes.add(parts[0].strip())
+                    used_nodes.add(parts[1].strip())
+
+        # Also mark the skill itself as a used node if it appears
+        # (e.g., TDDCI node for tdd:ci skill)
+        used_nodes.add(skill_name.upper().replace(":", ""))
+
+        annotated = annotate_mermaid(template, edge_counts, used_nodes)
+        diagrams[skill_name] = annotated
+        print(f"  Generated diagram for: {skill_name}", file=sys.stderr)
+
+    # Write diagrams.json next to the stats file
+    output_path = stats_path.parent / (
+        stats_path.stem.replace("-stats", "") + "-diagrams.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, "w") as f:
+        json.dump(diagrams, f, indent=2)
+
+    print(f"Diagrams written to: {output_path}", file=sys.stderr)
+    print(f"Skills processed: {len(diagrams)}/{len(skill_names)}", file=sys.stderr)
+
+    # Also print JSON to stdout for piping
+    print(json.dumps(diagrams, indent=2))
+
+    return diagrams
+
+
+# ---------------------------------------------------------------------------
 # Phase: placeholders for future phases
 # ---------------------------------------------------------------------------
 
@@ -479,7 +765,7 @@ def phase_stats(args):
 def phase_placeholder(phase_name, args):
     """Placeholder for phases not yet implemented."""
     print(f"Phase '{phase_name}' is not yet implemented.", file=sys.stderr)
-    print("Available phases: stats", file=sys.stderr)
+    print("Available phases: stats, mermaid", file=sys.stderr)
     sys.exit(0)
 
 
@@ -740,6 +1026,279 @@ def run_self_test():
     finally:
         tmp_path.unlink(missing_ok=True)
 
+    # ---- Mermaid phase tests ----
+    print("\n--- Mermaid phase tests ---", file=sys.stderr)
+
+    # Test: extract_mermaid_from_skill
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as skill_tmp:
+        skill_tmp.write(
+            "---\nname: test\n---\n\n"
+            "Some text\n\n"
+            "```mermaid\n"
+            "flowchart TD\n"
+            "    A --> B\n"
+            "    B -->|fail| C\n"
+            "    B -->|pass| D\n"
+            "```\n\n"
+            "More text\n"
+        )
+        skill_tmp.flush()
+        skill_md_path = skill_tmp.name
+
+    try:
+        mermaid_content = extract_mermaid_from_skill(skill_md_path)
+        check(
+            "extract_mermaid_from_skill finds block",
+            mermaid_content is not None,
+            f"got None",
+        )
+        check(
+            "extract_mermaid_from_skill content",
+            mermaid_content is not None and "flowchart TD" in mermaid_content,
+            f"got: {mermaid_content!r}",
+        )
+        check(
+            "extract_mermaid_from_skill has edges",
+            mermaid_content is not None and "A --> B" in mermaid_content,
+            f"got: {mermaid_content!r}",
+        )
+    finally:
+        os.unlink(skill_md_path)
+
+    check(
+        "extract_mermaid_from_skill missing file",
+        extract_mermaid_from_skill("/nonexistent/SKILL.md") is None,
+    )
+
+    # Test: find_edges
+    test_lines = [
+        "flowchart TD",
+        "    A --> B",
+        '    B -->|"fail"| C',
+        '    B -->|"pass"| D',
+        "    D --> E",
+        "    classDef foo fill:#fff",
+    ]
+    edges = find_edges(test_lines)
+    check("find_edges count", len(edges) == 4, f"got: {len(edges)}")
+    check(
+        "find_edges first src/dst",
+        len(edges) >= 1 and edges[0]["src"] == "A" and edges[0]["dst"] == "B",
+        f"got: {edges[0] if edges else 'empty'}",
+    )
+    check(
+        "find_edges failure detection",
+        len(edges) >= 2 and edges[1]["is_failure"] is True,
+        f"got: {edges[1] if len(edges) >= 2 else 'N/A'}",
+    )
+    check(
+        "find_edges success detection",
+        len(edges) >= 3 and edges[2]["is_failure"] is False,
+        f"got: {edges[2] if len(edges) >= 3 else 'N/A'}",
+    )
+    check(
+        "find_edges skips classDef",
+        all(e["src"] != "classDef" for e in edges),
+    )
+
+    # Test: annotate_mermaid - basic coloring
+    test_template = (
+        "flowchart TD\n"
+        "    START --> WORK\n"
+        '    WORK -->|"error"| FAIL\n'
+        '    WORK -->|"ok"| DONE\n'
+        "    classDef tdd fill:#4CAF50"
+    )
+    edge_counts = {"START->WORK": 1, "WORK->DONE": 1}
+    used_nodes = {"START", "WORK", "DONE"}
+
+    annotated = annotate_mermaid(test_template, edge_counts, used_nodes)
+
+    check(
+        "annotate_mermaid adds green linkStyle",
+        f"stroke:{COLOR_GREEN}" in annotated,
+        f"green color not found in annotated output",
+    )
+    check(
+        "annotate_mermaid adds grey for untraversed",
+        f"stroke:{COLOR_GREY}" in annotated,
+        f"grey color not found in annotated output",
+    )
+    check(
+        "annotate_mermaid adds traversal count",
+        "(1x)" in annotated,
+        f"traversal count not found in annotated output",
+    )
+    check(
+        "annotate_mermaid adds node style",
+        NODE_STYLE_USED in annotated,
+        f"node style not found in annotated output",
+    )
+
+    # Test: annotate_mermaid - failure edge coloring
+    fail_edge_counts = {"START->WORK": 1, "WORK->FAIL": 1}
+    fail_used_nodes = {"START", "WORK", "FAIL"}
+    fail_annotated = annotate_mermaid(test_template, fail_edge_counts, fail_used_nodes)
+
+    check(
+        "annotate_mermaid failure edge is red",
+        f"stroke:{COLOR_RED}" in fail_annotated,
+        f"red color not found in annotated output",
+    )
+
+    # Test: annotate_mermaid - edge label with count
+    annotated_lines = annotated.split("\n")
+    ok_line = [
+        l
+        for l in annotated_lines
+        if "DONE" in l and "ok" in l and not l.strip().startswith("style")
+    ]
+    check(
+        "annotate_mermaid label with count format",
+        len(ok_line) == 1 and "ok (1x)" in ok_line[0],
+        f"got: {ok_line}",
+    )
+
+    # Test: annotate_mermaid - edge without label gets count only
+    no_label_line = [l for l in annotated_lines if "START" in l and "WORK" in l]
+    check(
+        "annotate_mermaid no-label edge gets count",
+        len(no_label_line) == 1 and '"1x"' in no_label_line[0],
+        f"got: {no_label_line}",
+    )
+
+    # Test: find_skill_workflow with temp directory structure
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create skill directory: tmpdir/myskill/SKILL.md
+        skill_dir = os.path.join(tmpdir, "myskill")
+        os.makedirs(skill_dir)
+        with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
+            f.write("# Skill\n\n```mermaid\nflowchart TD\n    X --> Y\n```\n")
+
+        # Create colon-notation skill: tmpdir/myskill:sub/SKILL.md
+        sub_dir = os.path.join(tmpdir, "myskill:sub")
+        os.makedirs(sub_dir)
+        with open(os.path.join(sub_dir, "SKILL.md"), "w") as f:
+            f.write("# Sub\n\n```mermaid\nflowchart TD\n    P --> Q\n```\n")
+
+        wf = find_skill_workflow("myskill", tmpdir)
+        check(
+            "find_skill_workflow exact match",
+            wf is not None and "X --> Y" in wf,
+            f"got: {wf!r}",
+        )
+
+        wf_sub = find_skill_workflow("myskill:sub", tmpdir)
+        check(
+            "find_skill_workflow colon notation exact",
+            wf_sub is not None and "P --> Q" in wf_sub,
+            f"got: {wf_sub!r}",
+        )
+
+        wf_fallback = find_skill_workflow("myskill:other", tmpdir)
+        check(
+            "find_skill_workflow colon fallback to parent",
+            wf_fallback is not None and "X --> Y" in wf_fallback,
+            f"got: {wf_fallback!r}",
+        )
+
+        wf_missing = find_skill_workflow("nonexistent", tmpdir)
+        check(
+            "find_skill_workflow missing skill",
+            wf_missing is None,
+        )
+
+    # Test: phase_mermaid end-to-end with synthetic data
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create skill with mermaid
+        skill_dir = os.path.join(tmpdir, "skills", "deploy")
+        os.makedirs(skill_dir)
+        with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
+            f.write(
+                "---\nname: deploy\n---\n\n"
+                "```mermaid\n"
+                "flowchart TD\n"
+                "    BUILD --> TEST\n"
+                '    TEST -->|"fail"| FIX\n'
+                '    TEST -->|"pass"| DEPLOY\n'
+                "    FIX --> BUILD\n"
+                "    classDef ok fill:#4CAF50\n"
+                "```\n"
+            )
+
+        # Create stats JSON with workflow_edges
+        stats_data = {
+            "session_id": "test-mermaid",
+            "session_id_short": "test-mer",
+            "skills_invoked": [{"skill": "deploy", "count": 2, "status": "unknown"}],
+            "workflow_edges": {
+                "deploy": {
+                    "BUILD->TEST": 3,
+                    "TEST->DEPLOY": 1,
+                    "TEST->FIX": 2,
+                    "FIX->BUILD": 2,
+                }
+            },
+        }
+        stats_file = os.path.join(tmpdir, "test-stats.json")
+        with open(stats_file, "w") as f:
+            json.dump(stats_data, f)
+
+        # Run phase_mermaid
+        test_args = parse_args(
+            [
+                "--phase",
+                "mermaid",
+                "--stats-file",
+                stats_file,
+                "--skills-dir",
+                os.path.join(tmpdir, "skills"),
+            ]
+        )
+        diagrams = phase_mermaid(test_args)
+
+        check(
+            "phase_mermaid returns diagrams dict",
+            isinstance(diagrams, dict),
+            f"got: {type(diagrams)}",
+        )
+        check(
+            "phase_mermaid has deploy diagram",
+            "deploy" in diagrams,
+            f"keys: {list(diagrams.keys())}",
+        )
+
+        if "deploy" in diagrams:
+            d = diagrams["deploy"]
+            check(
+                "phase_mermaid deploy has green edges",
+                f"stroke:{COLOR_GREEN}" in d,
+                "no green edges",
+            )
+            check(
+                "phase_mermaid deploy has red edges",
+                f"stroke:{COLOR_RED}" in d,
+                "no red edges (fail edge should be red)",
+            )
+            check(
+                "phase_mermaid deploy has traversal counts",
+                '"3x"' in d or "(3x)" in d,
+                "no 3x traversal count for BUILD->TEST",
+            )
+            check(
+                "phase_mermaid deploy has node styles",
+                NODE_STYLE_USED in d,
+                "no node styles",
+            )
+
+        # Check diagrams.json was written
+        diagrams_file = os.path.join(tmpdir, "test-diagrams.json")
+        check(
+            "phase_mermaid writes diagrams.json",
+            os.path.isfile(diagrams_file),
+            f"expected: {diagrams_file}",
+        )
+
     # Summary
     total = passed + failed
     print(f"\nSelf-test: {passed}/{total} passed", file=sys.stderr)
@@ -766,7 +1325,9 @@ def main():
 
     if args.phase == "stats":
         phase_stats(args)
-    elif args.phase in ("mermaid", "comment", "summary", "extract", "dashboard"):
+    elif args.phase == "mermaid":
+        phase_mermaid(args)
+    elif args.phase in ("comment", "summary", "extract", "dashboard"):
         phase_placeholder(args.phase, args)
     else:
         print(f"ERROR: unknown phase '{args.phase}'", file=sys.stderr)
