@@ -402,7 +402,6 @@ def parse_session_jsonl(jsonl_path):
             "cache_creation": total_cache_creation,
             "cache_read": total_cache_read,
         },
-        "estimated_cost_usd": round(estimated_cost, 2),
         "tools": dict(tool_counts.most_common()),
         "skills_invoked": skills_list,
         "subagents": subagents_list,
@@ -465,7 +464,6 @@ def phase_stats(args):
         f"{total['cache_creation']:,} cache-create / {total['cache_read']:,} cache-read",
         file=sys.stderr,
     )
-    print(f"Cost:       ${stats['estimated_cost_usd']:.2f}", file=sys.stderr)
     print(
         f"Tools:      {sum(stats['tools'].values())} calls across {len(stats['tools'])} tools",
         file=sys.stderr,
@@ -851,7 +849,6 @@ def format_session_comment(stats, diagrams=None):
     sid_short = stats.get("session_id_short", sid[:8])
     branch = stats.get("branch", "")
     duration = stats.get("duration_minutes", 0)
-    cost = stats.get("estimated_cost_usd", 0.0)
     commits = stats.get("commits", [])
     skills = stats.get("skills_invoked", [])
     subagents = stats.get("subagents", [])
@@ -884,7 +881,6 @@ def format_session_comment(stats, diagrams=None):
     if primary_model:
         tldr_parts.append(primary_model)
     tldr_parts.append(format_duration(duration))
-    tldr_parts.append(f"${cost:.2f}")
     tldr_parts.append(f"{len(commits)} commit{'s' if len(commits) != 1 else ''}")
     if skills_str:
         tldr_parts.append(skills_str)
@@ -906,11 +902,10 @@ def format_session_comment(stats, diagrams=None):
     # Token usage table (per-model)
     lines.append("#### Token Usage")
     lines.append("")
-    lines.append("| Model | Input | Output | Cache Create | Cache Read | Est. Cost |")
-    lines.append("|-------|------:|-------:|-------------:|-----------:|----------:|")
+    lines.append("| Model | Input | Output | Cache Create | Cache Read |")
+    lines.append("|-------|------:|-------:|-------------:|-----------:|")
 
     for model_name, m in models.items():
-        model_cost = estimate_cost_for_model(model_name, m)
         short_model = re.sub(r"^claude-", "", model_name)
         short_model = re.sub(r"-\d{8}$", "", short_model)
         lines.append(
@@ -918,8 +913,7 @@ def format_session_comment(stats, diagrams=None):
             f"| {format_tokens(m.get('input_tokens', 0))} "
             f"| {format_tokens(m.get('output_tokens', 0))} "
             f"| {format_tokens(m.get('cache_creation_tokens', 0))} "
-            f"| {format_tokens(m.get('cache_read_tokens', 0))} "
-            f"| ${model_cost:.2f} |"
+            f"| {format_tokens(m.get('cache_read_tokens', 0))} |"
         )
 
     total = stats.get("total_tokens", {})
@@ -928,8 +922,7 @@ def format_session_comment(stats, diagrams=None):
         f"| **{format_tokens(total.get('input', 0))}** "
         f"| **{format_tokens(total.get('output', 0))}** "
         f"| **{format_tokens(total.get('cache_creation', 0))}** "
-        f"| **{format_tokens(total.get('cache_read', 0))}** "
-        f"| **${cost:.2f}** |"
+        f"| **{format_tokens(total.get('cache_read', 0))}** |"
     )
     lines.append("")
 
@@ -1075,7 +1068,6 @@ def format_summary_comment(sessions):
     total_cache_read = sum(
         s.get("total_tokens", {}).get("cache_read", 0) for s in sessions
     )
-    total_cost = sum(s.get("estimated_cost_usd", 0.0) for s in sessions)
     total_commits = sum(len(s.get("commits", [])) for s in sessions)
     total_duration = sum(s.get("duration_minutes", 0) for s in sessions)
 
@@ -1083,7 +1075,6 @@ def format_summary_comment(sessions):
     lines.append(
         f"**TL;DR:** {len(sessions)} sessions | "
         f"{format_duration(total_duration)} | "
-        f"${total_cost:.2f} | "
         f"{total_commits} commits"
     )
     lines.append("")
@@ -1103,15 +1094,14 @@ def format_summary_comment(sessions):
     lines.append(f"| Output Tokens | {format_tokens(total_output)} |")
     lines.append(f"| Cache Create Tokens | {format_tokens(total_cache_create)} |")
     lines.append(f"| Cache Read Tokens | {format_tokens(total_cache_read)} |")
-    lines.append(f"| Estimated Cost | ${total_cost:.2f} |")
     lines.append(f"| Total Commits | {total_commits} |")
     lines.append("")
 
     # Session history table
     lines.append("#### Session History")
     lines.append("")
-    lines.append("| Session | Branch | Duration | Input | Output | Cost | Commits |")
-    lines.append("|---------|--------|----------|------:|-------:|-----:|--------:|")
+    lines.append("| Session | Branch | Duration | Input | Output | Commits |")
+    lines.append("|---------|--------|----------|------:|-------:|--------:|")
 
     for s in sessions:
         sid_short = s.get("session_id_short", s.get("session_id", "?")[:8])
@@ -1119,22 +1109,15 @@ def format_summary_comment(sessions):
         dur = format_duration(s.get("duration_minutes", 0))
         inp = format_tokens(s.get("total_tokens", {}).get("input", 0))
         out = format_tokens(s.get("total_tokens", {}).get("output", 0))
-        cost = s.get("estimated_cost_usd", 0.0)
         n_commits = len(s.get("commits", []))
         lines.append(
-            f"| `{sid_short}` | `{branch}` | {dur} | {inp} | {out} "
-            f"| ${cost:.2f} | {n_commits} |"
+            f"| `{sid_short}` | `{branch}` | {dur} | {inp} | {out} | {n_commits} |"
         )
     lines.append("")
 
     # Totals verification
     lines.append("#### Totals Verification")
     lines.append("")
-    lines.append(
-        f"Sum of session costs: "
-        + " + ".join(f"${s.get('estimated_cost_usd', 0.0):.2f}" for s in sessions)
-        + f" = **${total_cost:.2f}**"
-    )
     lines.append(
         f"Sum of session commits: "
         + " + ".join(str(len(s.get("commits", []))) for s in sessions)
@@ -2228,25 +2211,9 @@ def run_self_test():
         )
 
         check(
-            "cost > 0",
-            stats["estimated_cost_usd"] > 0,
-            f"got: {stats['estimated_cost_usd']}",
-        )
-
-        # Verify cost calculation manually:
-        # 250 * 15/1M + 500 * 75/1M + 50 * 18.75/1M + 125 * 1.50/1M
-        # = 0.00375 + 0.0375 + 0.0009375 + 0.0001875 = 0.042375
-        expected_cost = round(
-            250 * 15 / 1_000_000
-            + 500 * 75 / 1_000_000
-            + 50 * 18.75 / 1_000_000
-            + 125 * 1.50 / 1_000_000,
-            2,
-        )
-        check(
-            "cost calculation",
-            stats["estimated_cost_usd"] == expected_cost,
-            f"expected: {expected_cost}, got: {stats['estimated_cost_usd']}",
+            "no estimated_cost_usd in stats",
+            "estimated_cost_usd" not in stats,
+            "estimated_cost_usd should not be in stats output",
         )
 
         check(
@@ -2733,9 +2700,9 @@ def run_self_test():
         "duration not in TL;DR",
     )
     check(
-        "comment TL;DR has cost",
-        "$12.45" in comment_body,
-        "cost not in TL;DR",
+        "comment TL;DR no cost",
+        "$12.45" not in comment_body,
+        "cost should not appear in TL;DR",
     )
     check(
         "comment TL;DR has commits",
@@ -2819,11 +2786,6 @@ def run_self_test():
             "parse_session_data session_id",
             parsed.get("session_id") == test_stats["session_id"],
             f"got: {parsed.get('session_id')}",
-        )
-        check(
-            "parse_session_data cost",
-            parsed.get("estimated_cost_usd") == test_stats["estimated_cost_usd"],
-            f"got: {parsed.get('estimated_cost_usd')}",
         )
         check(
             "parse_session_data total input",
@@ -2913,11 +2875,10 @@ def run_self_test():
     )
 
     # Verify sums match
-    expected_cost = 5.50 + 3.25
     check(
-        "summary cost sum",
-        f"${expected_cost:.2f}" in summary_body,
-        f"expected ${expected_cost:.2f} in summary",
+        "summary no cost",
+        "$5.50" not in summary_body and "$3.25" not in summary_body,
+        "cost should not appear in summary",
     )
     check(
         "summary commits sum",
