@@ -6,7 +6,7 @@ Pipeline phases:
   mermaid   - Generate annotated workflow diagrams from stats + SKILL.md templates
   comment   - Post PR/issue comment with session summary (placeholder)
   summary   - Generate human-readable summary (placeholder)
-  extract   - Export sessions to CSV/MD/HTML (placeholder)
+  extract   - Export sessions from PR/issue comments to CSV/MD/HTML
   dashboard - Aggregate multi-session dashboard (placeholder)
 
 Usage:
@@ -20,12 +20,14 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import os
 import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -1379,6 +1381,656 @@ def phase_summary(args):
 
 
 # ---------------------------------------------------------------------------
+# Phase: extract - Export session data from PR/issue comments to CSV/MD/HTML
+# ---------------------------------------------------------------------------
+
+# CSV columns for the extract output
+EXTRACT_CSV_COLUMNS = [
+    "pr_number",
+    "target_type",
+    "pr_title",
+    "pr_author",
+    "pr_status",
+    "session_id",
+    "session_started",
+    "session_duration_min",
+    "models_used",
+    "total_input_tokens",
+    "total_output_tokens",
+    "total_cache_create",
+    "total_cache_read",
+    "estimated_cost_usd",
+    "commits_count",
+    "commit_shas",
+    "skills_used",
+    "per_skill_tokens",
+    "subagent_count",
+    "per_subagent_tokens",
+    "problems_count",
+    "problems_resolved",
+    "lines_added",
+    "lines_removed",
+    "time_to_merge_hours",
+    "acceptance_status",
+]
+
+
+def _gh_list_items(repo, item_type, from_date=None, to_date=None):
+    """List PRs or issues via gh CLI.
+
+    Args:
+        repo: OWNER/NAME
+        item_type: 'pr' or 'issue'
+        from_date: YYYY-MM-DD start date filter (optional)
+        to_date: YYYY-MM-DD end date filter (optional)
+
+    Returns:
+        List of dicts with number, title, author, state, etc.
+    """
+    import subprocess
+
+    if item_type == "pr":
+        cmd = [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "all",
+            "--limit",
+            "200",
+            "--json",
+            "number,title,author,state,additions,deletions,createdAt,mergedAt,closedAt",
+        ]
+    else:
+        cmd = [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "all",
+            "--limit",
+            "200",
+            "--json",
+            "number,title,author,state,createdAt,closedAt",
+        ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            print(
+                f"WARNING: gh {item_type} list failed: {result.stderr}", file=sys.stderr
+            )
+            return []
+        items = json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"WARNING: gh {item_type} list failed: {e}", file=sys.stderr)
+        return []
+
+    # Filter by date range if specified
+    if from_date or to_date:
+        filtered = []
+        for item in items:
+            created = item.get("createdAt", "")
+            if created:
+                created_date = created[:10]  # YYYY-MM-DD
+                if from_date and created_date < from_date:
+                    continue
+                if to_date and created_date > to_date:
+                    continue
+            filtered.append(item)
+        return filtered
+
+    return items
+
+
+def _gh_fetch_comments(repo, number):
+    """Fetch all comments for a PR/issue number.
+
+    Returns list of comment dicts with 'body' field.
+    """
+    import subprocess
+
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo}/issues/{number}/comments",
+        "--paginate",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            print(
+                f"WARNING: fetch comments for #{number} failed: {result.stderr}",
+                file=sys.stderr,
+            )
+            return []
+        return json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"WARNING: fetch comments for #{number} failed: {e}", file=sys.stderr)
+        return []
+
+
+def _compute_pr_status(item, item_type):
+    """Compute pr_status and acceptance_status from GH API item.
+
+    Returns (pr_status, acceptance_status).
+    """
+    if item_type == "pr":
+        state = item.get("state", "").upper()
+        if state == "MERGED":
+            return "merged", "merged"
+        elif state == "CLOSED":
+            return "closed", "closed"
+        else:
+            return "open", "open"
+    else:
+        state = item.get("state", "").upper()
+        if state == "CLOSED":
+            return "closed", "closed"
+        else:
+            return "open", "open"
+
+
+def _compute_time_to_merge(item, item_type):
+    """Compute hours from creation to merge for PRs.
+
+    Returns float hours or empty string if not merged.
+    """
+    if item_type != "pr":
+        return ""
+    merged_at = item.get("mergedAt")
+    created_at = item.get("createdAt")
+    if not merged_at or not created_at:
+        return ""
+    try:
+        merged = parse_timestamp(merged_at)
+        created = parse_timestamp(created_at)
+        if merged and created:
+            return round((merged - created).total_seconds() / 3600, 1)
+    except Exception:
+        pass
+    return ""
+
+
+def _build_extract_row(item, item_type, session_data):
+    """Build a single CSV row dict from GH item metadata + parsed session data.
+
+    Args:
+        item: GH API item dict (PR or issue)
+        item_type: 'pr' or 'issue'
+        session_data: Parsed session JSON from comment
+
+    Returns:
+        Dict with keys matching EXTRACT_CSV_COLUMNS.
+    """
+    pr_status, acceptance_status = _compute_pr_status(item, item_type)
+
+    # Extract fields from session data
+    models = session_data.get("models", {})
+    models_used = ",".join(sorted(models.keys()))
+
+    total_tokens = session_data.get("total_tokens", {})
+
+    commits = session_data.get("commits", [])
+    commit_shas = ";".join(c.get("sha", c.get("message", "")[:7]) for c in commits)
+
+    skills = session_data.get("skills_invoked", [])
+    skills_used = ",".join(s.get("skill", "") for s in skills)
+
+    # Per-skill tokens: build from skills + models (approximate)
+    per_skill = {}
+    for s in skills:
+        skill_name = s.get("skill", "")
+        per_skill[skill_name] = {"in": 0, "out": 0}
+    per_skill_str = json.dumps(per_skill) if per_skill else ""
+
+    subagents = session_data.get("subagents", [])
+    per_subagent = {}
+    for sa in subagents:
+        sa_type = sa.get("type", "unknown")
+        tokens = sa.get("tokens", {})
+        if sa_type in per_subagent:
+            per_subagent[sa_type]["in"] += tokens.get("input", 0)
+            per_subagent[sa_type]["out"] += tokens.get("output", 0)
+        else:
+            per_subagent[sa_type] = {
+                "in": tokens.get("input", 0),
+                "out": tokens.get("output", 0),
+            }
+    per_subagent_str = json.dumps(per_subagent) if per_subagent else ""
+
+    problems = session_data.get("problems_faced", [])
+
+    # Author handling (gh pr list returns {login: ...}, gh issue list too)
+    author = item.get("author", {})
+    if isinstance(author, dict):
+        author_login = author.get("login", "")
+    else:
+        author_login = str(author)
+
+    return {
+        "pr_number": item.get("number", ""),
+        "target_type": item_type,
+        "pr_title": item.get("title", ""),
+        "pr_author": author_login,
+        "pr_status": pr_status,
+        "session_id": session_data.get("session_id", ""),
+        "session_started": session_data.get("started_at", ""),
+        "session_duration_min": session_data.get("duration_minutes", 0),
+        "models_used": models_used,
+        "total_input_tokens": total_tokens.get("input", 0),
+        "total_output_tokens": total_tokens.get("output", 0),
+        "total_cache_create": total_tokens.get("cache_creation", 0),
+        "total_cache_read": total_tokens.get("cache_read", 0),
+        "estimated_cost_usd": session_data.get("estimated_cost_usd", 0.0),
+        "commits_count": len(commits),
+        "commit_shas": commit_shas,
+        "skills_used": skills_used,
+        "per_skill_tokens": per_skill_str,
+        "subagent_count": len(subagents),
+        "per_subagent_tokens": per_subagent_str,
+        "problems_count": len(problems),
+        "problems_resolved": len(
+            [p for p in problems if isinstance(p, dict) and p.get("resolved")]
+        ),
+        "lines_added": item.get("additions", ""),
+        "lines_removed": item.get("deletions", ""),
+        "time_to_merge_hours": _compute_time_to_merge(item, item_type),
+        "acceptance_status": acceptance_status,
+    }
+
+
+def write_csv(rows, path):
+    """Write extract rows to CSV file.
+
+    Args:
+        rows: List of dicts with EXTRACT_CSV_COLUMNS keys.
+        path: Output file path.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=EXTRACT_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def write_md_report(rows, path, args):
+    """Write markdown analytics report.
+
+    Args:
+        rows: List of dicts with EXTRACT_CSV_COLUMNS keys.
+        path: Output file path.
+        args: CLI args (for repo, from_date, to_date).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    repo = getattr(args, "repo", "") or "unknown"
+    from_date = getattr(args, "from_date", "") or "start"
+    to_date = getattr(args, "to_date", "") or "now"
+
+    # Compute summary metrics
+    pr_rows = [r for r in rows if r.get("target_type") == "pr"]
+    issue_rows = [r for r in rows if r.get("target_type") == "issue"]
+    total_sessions = len(rows)
+    total_cost = sum(float(r.get("estimated_cost_usd", 0)) for r in rows)
+    avg_cost = total_cost / total_sessions if total_sessions else 0
+
+    # Unique PRs/issues
+    unique_prs = set(r["pr_number"] for r in pr_rows)
+    unique_issues = set(r["pr_number"] for r in issue_rows)
+
+    # PR acceptance rate
+    merged_prs = set(
+        r["pr_number"] for r in pr_rows if r.get("acceptance_status") == "merged"
+    )
+    closed_prs = set(
+        r["pr_number"]
+        for r in pr_rows
+        if r.get("acceptance_status") in ("merged", "closed")
+    )
+    acceptance_rate = (len(merged_prs) / len(closed_prs) * 100) if closed_prs else 0
+
+    lines = []
+    lines.append("# Claude Code Analytics Report")
+    lines.append("")
+    lines.append(f"**Period:** {from_date} to {to_date}")
+    lines.append(f"**Repository:** {repo}")
+    lines.append("")
+
+    # Summary table
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| PRs with session data | {len(unique_prs)} |")
+    lines.append(f"| Issues with session data | {len(unique_issues)} |")
+    lines.append(f"| Total sessions | {total_sessions} |")
+    lines.append(f"| Total cost | ${total_cost:.2f} |")
+    lines.append(f"| Average cost per session | ${avg_cost:.2f} |")
+    lines.append(f"| PR acceptance rate | {acceptance_rate:.0f}% |")
+    lines.append("")
+
+    # Per-PR/issue breakdown
+    lines.append("## Per-PR Breakdown")
+    lines.append("")
+    lines.append("| # | Type | Title | Author | Status | Sessions | Cost | Commits |")
+    lines.append("|---|------|-------|--------|--------|----------|------|---------|")
+
+    # Group rows by pr_number
+    by_number = defaultdict(list)
+    for r in rows:
+        by_number[r["pr_number"]].append(r)
+
+    for num in sorted(
+        by_number.keys(), key=lambda x: int(x) if str(x).isdigit() else 0
+    ):
+        group = by_number[num]
+        first = group[0]
+        group_cost = sum(float(r.get("estimated_cost_usd", 0)) for r in group)
+        group_commits = sum(int(r.get("commits_count", 0)) for r in group)
+        lines.append(
+            f"| {num} "
+            f"| {first.get('target_type', '')} "
+            f"| {first.get('pr_title', '')[:50]} "
+            f"| {first.get('pr_author', '')} "
+            f"| {first.get('pr_status', '')} "
+            f"| {len(group)} "
+            f"| ${group_cost:.2f} "
+            f"| {group_commits} |"
+        )
+    lines.append("")
+
+    # Model usage distribution
+    lines.append("## Model Usage Distribution")
+    lines.append("")
+    lines.append("| Model | Session Count |")
+    lines.append("|-------|--------------|")
+
+    model_counts = Counter()
+    for r in rows:
+        models = r.get("models_used", "")
+        if models:
+            for m in models.split(","):
+                m = m.strip()
+                if m:
+                    model_counts[m] += 1
+
+    for model, count in model_counts.most_common():
+        lines.append(f"| {model} | {count} |")
+    lines.append("")
+
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+
+def write_html_dashboard(rows, path, args):
+    """Write HTML dashboard with Chart.js charts.
+
+    Args:
+        rows: List of dicts with EXTRACT_CSV_COLUMNS keys.
+        path: Output file path.
+        args: CLI args (for repo, from_date, to_date).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    repo = getattr(args, "repo", "") or "unknown"
+    from_date = getattr(args, "from_date", "") or "start"
+    to_date = getattr(args, "to_date", "") or "now"
+
+    # Compute stats for cards
+    total_sessions = len(rows)
+    total_cost = sum(float(r.get("estimated_cost_usd", 0)) for r in rows)
+    unique_numbers = set(r["pr_number"] for r in rows)
+    total_prs_issues = len(unique_numbers)
+    total_commits = sum(int(r.get("commits_count", 0)) for r in rows)
+
+    # Cost per PR data
+    cost_by_pr = defaultdict(float)
+    for r in rows:
+        label = f"#{r['pr_number']}"
+        cost_by_pr[label] += float(r.get("estimated_cost_usd", 0))
+    cost_pr_labels = json.dumps(list(cost_by_pr.keys()))
+    cost_pr_values = json.dumps([round(v, 2) for v in cost_by_pr.values()])
+
+    # Skills usage frequency
+    skill_counts = Counter()
+    for r in rows:
+        skills = r.get("skills_used", "")
+        if skills:
+            for s in skills.split(","):
+                s = s.strip()
+                if s:
+                    skill_counts[s] += 1
+    skill_labels = json.dumps(list(skill_counts.keys()) if skill_counts else ["(none)"])
+    skill_values = json.dumps(list(skill_counts.values()) if skill_counts else [1])
+
+    # Model distribution
+    model_counts = Counter()
+    for r in rows:
+        models = r.get("models_used", "")
+        if models:
+            for m in models.split(","):
+                m = m.strip()
+                if m:
+                    model_counts[m] += 1
+    model_labels = json.dumps(list(model_counts.keys()) if model_counts else ["(none)"])
+    model_values = json.dumps(list(model_counts.values()) if model_counts else [1])
+
+    # Sessions over time (by date)
+    sessions_by_date = Counter()
+    for r in rows:
+        started = r.get("session_started", "")
+        if started:
+            date_str = str(started)[:10]  # YYYY-MM-DD
+            if date_str and date_str != "None":
+                sessions_by_date[date_str] += 1
+    sorted_dates = sorted(sessions_by_date.keys())
+    date_labels = json.dumps(sorted_dates if sorted_dates else ["(no data)"])
+    date_values = json.dumps(
+        [sessions_by_date[d] for d in sorted_dates] if sorted_dates else [0]
+    )
+
+    # Chart.js color palette
+    colors = [
+        "'#4CAF50'",
+        "'#2196F3'",
+        "'#FF9800'",
+        "'#9C27B0'",
+        "'#F44336'",
+        "'#00BCD4'",
+        "'#FFC107'",
+        "'#795548'",
+        "'#607D8B'",
+        "'#E91E63'",
+        "'#3F51B5'",
+        "'#8BC34A'",
+    ]
+
+    def color_array(n):
+        return "[" + ",".join(colors[i % len(colors)] for i in range(n)) + "]"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code Analytics Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #f5f5f5; color: #333; padding: 20px; }}
+  h1 {{ text-align: center; margin-bottom: 5px; color: #1a1a2e; }}
+  .subtitle {{ text-align: center; color: #666; margin-bottom: 20px; font-size: 14px; }}
+  .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px; margin-bottom: 24px; }}
+  .card {{ background: #fff; border-radius: 8px; padding: 20px;
+           box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }}
+  .card .value {{ font-size: 32px; font-weight: 700; color: #1a1a2e; }}
+  .card .label {{ font-size: 14px; color: #666; margin-top: 4px; }}
+  .charts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+             gap: 20px; }}
+  .chart-box {{ background: #fff; border-radius: 8px; padding: 20px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+  .chart-box h3 {{ margin-bottom: 12px; color: #1a1a2e; }}
+  canvas {{ max-height: 350px; }}
+  .footer {{ text-align: center; margin-top: 24px; color: #999; font-size: 12px; }}
+</style>
+</head>
+<body>
+<h1>Claude Code Analytics Dashboard</h1>
+<p class="subtitle">{repo} &mdash; {from_date} to {to_date}</p>
+
+<div class="cards">
+  <div class="card"><div class="value">{total_sessions}</div><div class="label">Sessions</div></div>
+  <div class="card"><div class="value">${total_cost:.2f}</div><div class="label">Total Cost</div></div>
+  <div class="card"><div class="value">{total_prs_issues}</div><div class="label">PRs / Issues</div></div>
+  <div class="card"><div class="value">{total_commits}</div><div class="label">Commits</div></div>
+</div>
+
+<div class="charts">
+  <div class="chart-box">
+    <h3>Cost per PR</h3>
+    <canvas id="costChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Skills Usage</h3>
+    <canvas id="skillsChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Model Distribution</h3>
+    <canvas id="modelChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Sessions Over Time</h3>
+    <canvas id="timeChart"></canvas>
+  </div>
+</div>
+
+<div class="footer">Generated by session-analytics.py &mdash; {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}</div>
+
+<script>
+// Cost per PR - Bar chart
+new Chart(document.getElementById('costChart'), {{
+  type: 'bar',
+  data: {{
+    labels: {cost_pr_labels},
+    datasets: [{{ label: 'Cost (USD)', data: {cost_pr_values},
+      backgroundColor: {color_array(len(cost_by_pr))},
+    }}]
+  }},
+  options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }} }}
+}});
+
+// Skills Usage - Pie chart
+new Chart(document.getElementById('skillsChart'), {{
+  type: 'pie',
+  data: {{
+    labels: {skill_labels},
+    datasets: [{{ data: {skill_values},
+      backgroundColor: {color_array(max(len(skill_counts), 1))},
+    }}]
+  }},
+  options: {{ responsive: true }}
+}});
+
+// Model Distribution - Doughnut chart
+new Chart(document.getElementById('modelChart'), {{
+  type: 'doughnut',
+  data: {{
+    labels: {model_labels},
+    datasets: [{{ data: {model_values},
+      backgroundColor: {color_array(max(len(model_counts), 1))},
+    }}]
+  }},
+  options: {{ responsive: true }}
+}});
+
+// Sessions Over Time - Line chart
+new Chart(document.getElementById('timeChart'), {{
+  type: 'line',
+  data: {{
+    labels: {date_labels},
+    datasets: [{{ label: 'Sessions', data: {date_values},
+      borderColor: '#2196F3', backgroundColor: 'rgba(33,150,243,0.1)',
+      fill: true, tension: 0.3,
+    }}]
+  }},
+  options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }} }}
+}});
+</script>
+</body>
+</html>"""
+
+    with open(path, "w") as f:
+        f.write(html)
+
+
+def phase_extract(args):
+    """Extract session data from PR/issue comments to CSV/MD/HTML."""
+    if not args.repo:
+        print("ERROR: --repo is required for extract phase", file=sys.stderr)
+        sys.exit(1)
+
+    from_date = getattr(args, "from_date", None)
+    to_date = getattr(args, "to_date", None)
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+
+    # Fetch PRs and issues
+    for item_type in ("pr", "issue"):
+        print(f"Fetching {item_type}s from {args.repo}...", file=sys.stderr)
+        items = _gh_list_items(args.repo, item_type, from_date, to_date)
+        print(f"  Found {len(items)} {item_type}(s)", file=sys.stderr)
+
+        for item in items:
+            number = item.get("number")
+            if not number:
+                continue
+
+            comments = _gh_fetch_comments(args.repo, number)
+
+            for comment in comments:
+                body = comment.get("body", "")
+                # Find session comments with SESSION: marker (not SUMMARY)
+                if SESSION_MARKER_PREFIX in body and SUMMARY_MARKER not in body:
+                    session_data = parse_session_data_from_comment(body)
+                    if session_data:
+                        row = _build_extract_row(item, item_type, session_data)
+                        rows.append(row)
+
+    print(f"\nExtracted {len(rows)} session(s) total", file=sys.stderr)
+
+    # Write outputs
+    csv_path = output_dir / "analytics.csv"
+    md_path = output_dir / "analytics.md"
+    html_path = output_dir / "dashboard.html"
+
+    write_csv(rows, csv_path)
+    print(f"CSV written to:  {csv_path}", file=sys.stderr)
+
+    write_md_report(rows, md_path, args)
+    print(f"MD written to:   {md_path}", file=sys.stderr)
+
+    write_html_dashboard(rows, html_path, args)
+    print(f"HTML written to: {html_path}", file=sys.stderr)
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Phase: placeholders for future phases
 # ---------------------------------------------------------------------------
 
@@ -1386,7 +2038,9 @@ def phase_summary(args):
 def phase_placeholder(phase_name, args):
     """Placeholder for phases not yet implemented."""
     print(f"Phase '{phase_name}' is not yet implemented.", file=sys.stderr)
-    print("Available phases: stats, mermaid, comment, summary", file=sys.stderr)
+    print(
+        "Available phases: stats, mermaid, comment, summary, extract", file=sys.stderr
+    )
     sys.exit(0)
 
 
@@ -2342,6 +2996,499 @@ def run_self_test():
         "commits should not appear when empty",
     )
 
+    # ---- Extract phase tests ----
+    print("\n--- Extract phase tests ---", file=sys.stderr)
+
+    # Build synthetic extract rows for testing
+    synthetic_rows = [
+        {
+            "pr_number": 42,
+            "target_type": "pr",
+            "pr_title": "Add feature X",
+            "pr_author": "alice",
+            "pr_status": "merged",
+            "session_id": "aaa-1111-2222-3333",
+            "session_started": "2026-01-10T09:00:00+00:00",
+            "session_duration_min": 45,
+            "models_used": "claude-opus-4-6",
+            "total_input_tokens": 50000,
+            "total_output_tokens": 20000,
+            "total_cache_create": 8000,
+            "total_cache_read": 3000,
+            "estimated_cost_usd": 5.25,
+            "commits_count": 2,
+            "commit_shas": "abc1234;def5678",
+            "skills_used": "tdd:ci,k8s:health",
+            "per_skill_tokens": '{"tdd:ci":{"in":1000,"out":500}}',
+            "subagent_count": 1,
+            "per_subagent_tokens": '{"Explore":{"in":2000,"out":1000}}',
+            "problems_count": 1,
+            "problems_resolved": 0,
+            "lines_added": 120,
+            "lines_removed": 30,
+            "time_to_merge_hours": 4.5,
+            "acceptance_status": "merged",
+        },
+        {
+            "pr_number": 43,
+            "target_type": "pr",
+            "pr_title": "Fix bug Y",
+            "pr_author": "bob",
+            "pr_status": "open",
+            "session_id": "bbb-4444-5555-6666",
+            "session_started": "2026-01-12T14:00:00+00:00",
+            "session_duration_min": 30,
+            "models_used": "claude-sonnet-4-5-20250514",
+            "total_input_tokens": 30000,
+            "total_output_tokens": 10000,
+            "total_cache_create": 5000,
+            "total_cache_read": 2000,
+            "estimated_cost_usd": 1.80,
+            "commits_count": 1,
+            "commit_shas": "ghi9012",
+            "skills_used": "tdd:ci",
+            "per_skill_tokens": '{"tdd:ci":{"in":500,"out":200}}',
+            "subagent_count": 0,
+            "per_subagent_tokens": "",
+            "problems_count": 0,
+            "problems_resolved": 0,
+            "lines_added": 50,
+            "lines_removed": 10,
+            "time_to_merge_hours": "",
+            "acceptance_status": "open",
+        },
+        {
+            "pr_number": 10,
+            "target_type": "issue",
+            "pr_title": "Investigate flaky test",
+            "pr_author": "carol",
+            "pr_status": "closed",
+            "session_id": "ccc-7777-8888-9999",
+            "session_started": "2026-01-15T08:30:00+00:00",
+            "session_duration_min": 20,
+            "models_used": "claude-opus-4-6,claude-sonnet-4-5-20250514",
+            "total_input_tokens": 15000,
+            "total_output_tokens": 5000,
+            "total_cache_create": 2000,
+            "total_cache_read": 1000,
+            "estimated_cost_usd": 0.95,
+            "commits_count": 0,
+            "commit_shas": "",
+            "skills_used": "",
+            "per_skill_tokens": "",
+            "subagent_count": 0,
+            "per_subagent_tokens": "",
+            "problems_count": 2,
+            "problems_resolved": 0,
+            "lines_added": "",
+            "lines_removed": "",
+            "time_to_merge_hours": "",
+            "acceptance_status": "closed",
+        },
+    ]
+
+    # Test: CSV round-trip
+    with tempfile.TemporaryDirectory() as tmpdir:
+        csv_path = os.path.join(tmpdir, "test_analytics.csv")
+        write_csv(synthetic_rows, csv_path)
+
+        check(
+            "write_csv creates file",
+            os.path.isfile(csv_path),
+            f"file not found: {csv_path}",
+        )
+
+        # Read CSV back
+        with open(csv_path, "r") as f:
+            reader = csv.DictReader(f)
+            csv_rows = list(reader)
+
+        check(
+            "csv round-trip row count",
+            len(csv_rows) == 3,
+            f"expected 3 rows, got {len(csv_rows)}",
+        )
+        check(
+            "csv has all columns",
+            set(csv_rows[0].keys()) == set(EXTRACT_CSV_COLUMNS),
+            f"columns mismatch: got {set(csv_rows[0].keys())} vs expected {set(EXTRACT_CSV_COLUMNS)}",
+        )
+        check(
+            "csv round-trip pr_number",
+            csv_rows[0]["pr_number"] == "42",
+            f"got: {csv_rows[0]['pr_number']}",
+        )
+        check(
+            "csv round-trip session_id",
+            csv_rows[0]["session_id"] == "aaa-1111-2222-3333",
+            f"got: {csv_rows[0]['session_id']}",
+        )
+        check(
+            "csv round-trip cost",
+            csv_rows[0]["estimated_cost_usd"] == "5.25",
+            f"got: {csv_rows[0]['estimated_cost_usd']}",
+        )
+        check(
+            "csv round-trip target_type",
+            csv_rows[2]["target_type"] == "issue",
+            f"got: {csv_rows[2]['target_type']}",
+        )
+
+    # Test: write_md_report
+    with tempfile.TemporaryDirectory() as tmpdir:
+        md_path = os.path.join(tmpdir, "test_analytics.md")
+        test_md_args = parse_args(
+            [
+                "--phase",
+                "extract",
+                "--repo",
+                "test/repo",
+                "--from-date",
+                "2026-01-01",
+                "--to-date",
+                "2026-01-31",
+            ]
+        )
+        write_md_report(synthetic_rows, md_path, test_md_args)
+
+        check(
+            "write_md_report creates file",
+            os.path.isfile(md_path),
+            f"file not found: {md_path}",
+        )
+
+        with open(md_path, "r") as f:
+            md_content = f.read()
+
+        check(
+            "md has title",
+            "# Claude Code Analytics Report" in md_content,
+            "title not found",
+        )
+        check(
+            "md has period",
+            "2026-01-01" in md_content and "2026-01-31" in md_content,
+            "period not found",
+        )
+        check(
+            "md has repository",
+            "test/repo" in md_content,
+            "repository not found",
+        )
+        check(
+            "md has summary section",
+            "## Summary" in md_content,
+            "summary section not found",
+        )
+        check(
+            "md has total sessions",
+            "| Total sessions | 3 |" in md_content,
+            "total sessions not found",
+        )
+        total_test_cost = 5.25 + 1.80 + 0.95
+        check(
+            "md has total cost",
+            f"${total_test_cost:.2f}" in md_content,
+            f"expected ${total_test_cost:.2f} in md",
+        )
+        check(
+            "md has per-PR breakdown",
+            "## Per-PR Breakdown" in md_content,
+            "per-PR breakdown not found",
+        )
+        check(
+            "md has model usage",
+            "## Model Usage Distribution" in md_content,
+            "model usage section not found",
+        )
+        check(
+            "md has opus model",
+            "claude-opus-4-6" in md_content,
+            "opus model not found in model distribution",
+        )
+        check(
+            "md has sonnet model",
+            "claude-sonnet-4-5-20250514" in md_content,
+            "sonnet model not found in model distribution",
+        )
+        check(
+            "md has PRs with session data count",
+            "| PRs with session data | 2 |" in md_content,
+            "PRs count incorrect",
+        )
+        check(
+            "md has issues with session data count",
+            "| Issues with session data | 1 |" in md_content,
+            "issues count incorrect",
+        )
+
+    # Test: write_html_dashboard
+    with tempfile.TemporaryDirectory() as tmpdir:
+        html_path = os.path.join(tmpdir, "test_dashboard.html")
+        test_html_args = parse_args(
+            [
+                "--phase",
+                "extract",
+                "--repo",
+                "test/repo",
+                "--from-date",
+                "2026-01-01",
+                "--to-date",
+                "2026-01-31",
+            ]
+        )
+        write_html_dashboard(synthetic_rows, html_path, test_html_args)
+
+        check(
+            "write_html_dashboard creates file",
+            os.path.isfile(html_path),
+            f"file not found: {html_path}",
+        )
+
+        with open(html_path, "r") as f:
+            html_content = f.read()
+
+        check(
+            "html has doctype",
+            "<!DOCTYPE html>" in html_content,
+            "DOCTYPE not found",
+        )
+        check(
+            "html has chart.js CDN",
+            "chart.js" in html_content or "chart.umd.min.js" in html_content,
+            "Chart.js CDN not found",
+        )
+        check(
+            "html has title",
+            "Claude Code Analytics Dashboard" in html_content,
+            "title not found",
+        )
+        check(
+            "html has session count card",
+            ">3</div>" in html_content,
+            "session count card not found",
+        )
+        check(
+            "html has total cost card",
+            f">${total_test_cost:.2f}</div>" in html_content,
+            f"total cost card not found (expected ${total_test_cost:.2f})",
+        )
+        check(
+            "html has commits card",
+            ">3</div>" in html_content,
+            "commits card not found",
+        )
+        check(
+            "html has cost chart canvas",
+            'id="costChart"' in html_content,
+            "cost chart canvas not found",
+        )
+        check(
+            "html has skills chart canvas",
+            'id="skillsChart"' in html_content,
+            "skills chart canvas not found",
+        )
+        check(
+            "html has model chart canvas",
+            'id="modelChart"' in html_content,
+            "model chart canvas not found",
+        )
+        check(
+            "html has time chart canvas",
+            'id="timeChart"' in html_content,
+            "time chart canvas not found",
+        )
+        check(
+            "html has new Chart calls",
+            html_content.count("new Chart") == 4,
+            f"expected 4 Chart instances, got {html_content.count('new Chart')}",
+        )
+        check(
+            "html has repo info",
+            "test/repo" in html_content,
+            "repo not in HTML",
+        )
+
+    # Test: _build_extract_row with synthetic data
+    test_item = {
+        "number": 99,
+        "title": "Test PR",
+        "author": {"login": "tester"},
+        "state": "MERGED",
+        "additions": 200,
+        "deletions": 50,
+        "createdAt": "2026-01-01T10:00:00Z",
+        "mergedAt": "2026-01-01T14:00:00Z",
+    }
+    test_session = {
+        "session_id": "build-row-test-id",
+        "started_at": "2026-01-01T10:00:00+00:00",
+        "duration_minutes": 30,
+        "models": {"claude-opus-4-6": {"messages": 5}},
+        "total_tokens": {
+            "input": 1000,
+            "output": 500,
+            "cache_creation": 200,
+            "cache_read": 100,
+        },
+        "estimated_cost_usd": 0.50,
+        "commits": [
+            {"message": "commit A", "sha": "aaaa111"},
+            {"message": "commit B", "sha": "bbbb222"},
+        ],
+        "skills_invoked": [
+            {"skill": "k8s:health", "count": 1, "status": "unknown"},
+        ],
+        "subagents": [
+            {"type": "Explore", "tokens": {"input": 300, "output": 150}},
+        ],
+        "problems_faced": ["build error"],
+    }
+
+    built_row = _build_extract_row(test_item, "pr", test_session)
+    check(
+        "build_row pr_number",
+        built_row["pr_number"] == 99,
+        f"got: {built_row['pr_number']}",
+    )
+    check(
+        "build_row target_type",
+        built_row["target_type"] == "pr",
+        f"got: {built_row['target_type']}",
+    )
+    check(
+        "build_row pr_author",
+        built_row["pr_author"] == "tester",
+        f"got: {built_row['pr_author']}",
+    )
+    check(
+        "build_row pr_status merged",
+        built_row["pr_status"] == "merged",
+        f"got: {built_row['pr_status']}",
+    )
+    check(
+        "build_row acceptance_status merged",
+        built_row["acceptance_status"] == "merged",
+        f"got: {built_row['acceptance_status']}",
+    )
+    check(
+        "build_row time_to_merge_hours",
+        built_row["time_to_merge_hours"] == 4.0,
+        f"got: {built_row['time_to_merge_hours']}",
+    )
+    check(
+        "build_row lines_added",
+        built_row["lines_added"] == 200,
+        f"got: {built_row['lines_added']}",
+    )
+    check(
+        "build_row commits_count",
+        built_row["commits_count"] == 2,
+        f"got: {built_row['commits_count']}",
+    )
+    check(
+        "build_row skills_used",
+        built_row["skills_used"] == "k8s:health",
+        f"got: {built_row['skills_used']}",
+    )
+    check(
+        "build_row subagent_count",
+        built_row["subagent_count"] == 1,
+        f"got: {built_row['subagent_count']}",
+    )
+    check(
+        "build_row problems_count",
+        built_row["problems_count"] == 1,
+        f"got: {built_row['problems_count']}",
+    )
+    check(
+        "build_row models_used",
+        built_row["models_used"] == "claude-opus-4-6",
+        f"got: {built_row['models_used']}",
+    )
+
+    # Test: _compute_pr_status
+    check(
+        "compute_status pr merged",
+        _compute_pr_status({"state": "MERGED"}, "pr") == ("merged", "merged"),
+        f"got: {_compute_pr_status({'state': 'MERGED'}, 'pr')}",
+    )
+    check(
+        "compute_status pr closed",
+        _compute_pr_status({"state": "CLOSED"}, "pr") == ("closed", "closed"),
+        f"got: {_compute_pr_status({'state': 'CLOSED'}, 'pr')}",
+    )
+    check(
+        "compute_status pr open",
+        _compute_pr_status({"state": "OPEN"}, "pr") == ("open", "open"),
+        f"got: {_compute_pr_status({'state': 'OPEN'}, 'pr')}",
+    )
+    check(
+        "compute_status issue closed",
+        _compute_pr_status({"state": "CLOSED"}, "issue") == ("closed", "closed"),
+        f"got: {_compute_pr_status({'state': 'CLOSED'}, 'issue')}",
+    )
+
+    # Test: _compute_time_to_merge
+    check(
+        "time_to_merge not pr",
+        _compute_time_to_merge({"mergedAt": "x"}, "issue") == "",
+        "expected empty for issue",
+    )
+    check(
+        "time_to_merge no merge",
+        _compute_time_to_merge({"createdAt": "2026-01-01T10:00:00Z"}, "pr") == "",
+        "expected empty when not merged",
+    )
+    check(
+        "time_to_merge calculation",
+        _compute_time_to_merge(
+            {"createdAt": "2026-01-01T10:00:00Z", "mergedAt": "2026-01-01T16:30:00Z"},
+            "pr",
+        )
+        == 6.5,
+        f"got: {_compute_time_to_merge({'createdAt': '2026-01-01T10:00:00Z', 'mergedAt': '2026-01-01T16:30:00Z'}, 'pr')}",
+    )
+
+    # Test: write_md_report with empty rows
+    with tempfile.TemporaryDirectory() as tmpdir:
+        md_empty_path = os.path.join(tmpdir, "empty.md")
+        empty_args = parse_args(["--phase", "extract", "--repo", "x/y"])
+        write_md_report([], md_empty_path, empty_args)
+
+        with open(md_empty_path, "r") as f:
+            empty_md = f.read()
+
+        check(
+            "empty md has title",
+            "# Claude Code Analytics Report" in empty_md,
+            "title not found in empty report",
+        )
+        check(
+            "empty md has zero sessions",
+            "| Total sessions | 0 |" in empty_md,
+            "zero sessions not found",
+        )
+
+    # Test: write_html_dashboard with empty rows
+    with tempfile.TemporaryDirectory() as tmpdir:
+        html_empty_path = os.path.join(tmpdir, "empty.html")
+        write_html_dashboard([], html_empty_path, empty_args)
+
+        with open(html_empty_path, "r") as f:
+            empty_html = f.read()
+
+        check(
+            "empty html has doctype",
+            "<!DOCTYPE html>" in empty_html,
+            "DOCTYPE not found in empty dashboard",
+        )
+        check(
+            "empty html has zero sessions",
+            ">0</div>" in empty_html,
+            "zero sessions card not found",
+        )
+
     # Summary
     total = passed + failed
     print(f"\nSelf-test: {passed}/{total} passed", file=sys.stderr)
@@ -2374,7 +3521,9 @@ def main():
         phase_comment(args)
     elif args.phase == "summary":
         phase_summary(args)
-    elif args.phase in ("extract", "dashboard"):
+    elif args.phase == "extract":
+        phase_extract(args)
+    elif args.phase == "dashboard":
         phase_placeholder(args.phase, args)
     else:
         print(f"ERROR: unknown phase '{args.phase}'", file=sys.stderr)
