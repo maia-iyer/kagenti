@@ -72,6 +72,10 @@ FALLBACK_PRICING = {
     "cache_read": 1.50,
 }
 
+# GitHub comment markers
+SESSION_MARKER_PREFIX = "<!-- SESSION:"
+SUMMARY_MARKER = "<!-- SESSION_SUMMARY -->"
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -113,6 +117,15 @@ def parse_args(argv=None):
         "--output-dir",
         default=str(OUTPUT_BASE),
         help=f"Output directory (default: {OUTPUT_BASE})",
+    )
+    p.add_argument(
+        "--diagrams-file",
+        help="Path to diagrams JSON file (for comment phase)",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print comment body without posting to GitHub",
     )
     p.add_argument(
         "--self-test", action="store_true", help="Run built-in self-test mode"
@@ -758,6 +771,614 @@ def phase_mermaid(args):
 
 
 # ---------------------------------------------------------------------------
+# Comment / Summary formatting helpers
+# ---------------------------------------------------------------------------
+
+
+def format_duration(minutes):
+    """Format minutes as Xh Ym.
+
+    >>> format_duration(0)
+    '0m'
+    >>> format_duration(45)
+    '45m'
+    >>> format_duration(78)
+    '1h 18m'
+    >>> format_duration(120)
+    '2h 0m'
+    """
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins}m"
+
+
+def format_tokens(n):
+    """Format token count with K/M suffix.
+
+    >>> format_tokens(500)
+    '500'
+    >>> format_tokens(1500)
+    '1.5K'
+    >>> format_tokens(25000)
+    '25.0K'
+    >>> format_tokens(1500000)
+    '1.5M'
+    """
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    elif n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
+def estimate_cost_for_model(model_name, tokens):
+    """Estimate cost for a single model given its token counts.
+
+    Args:
+        model_name: Model identifier string.
+        tokens: Dict with input_tokens, output_tokens, cache_creation_tokens,
+                cache_read_tokens.
+
+    Returns:
+        Cost in USD (float).
+    """
+    pricing = MODEL_PRICING.get(model_name, FALLBACK_PRICING)
+    return (
+        tokens.get("input_tokens", 0) * pricing["input"] / 1_000_000
+        + tokens.get("output_tokens", 0) * pricing["output"] / 1_000_000
+        + tokens.get("cache_creation_tokens", 0) * pricing["cache_create"] / 1_000_000
+        + tokens.get("cache_read_tokens", 0) * pricing["cache_read"] / 1_000_000
+    )
+
+
+def _session_marker(session_id):
+    """Build the hidden comment marker for a session (first 16 chars)."""
+    short = session_id[:16] if session_id else "unknown"
+    return f"{SESSION_MARKER_PREFIX}{short} -->"
+
+
+def format_session_comment(stats, diagrams=None):
+    """Format session stats as a GitHub comment markdown body.
+
+    The comment contains a hidden marker, TL;DR, tables, collapsible
+    sections, and embedded JSON for machine parsing.
+    """
+    sid = stats.get("session_id", "unknown")
+    sid_short = stats.get("session_id_short", sid[:8])
+    branch = stats.get("branch", "")
+    duration = stats.get("duration_minutes", 0)
+    cost = stats.get("estimated_cost_usd", 0.0)
+    commits = stats.get("commits", [])
+    skills = stats.get("skills_invoked", [])
+    subagents = stats.get("subagents", [])
+    tools = stats.get("tools", {})
+    models = stats.get("models", {})
+    problems = stats.get("problems_faced", [])
+
+    # Primary model name (short form for TL;DR)
+    primary_model = ""
+    if models:
+        # Pick the model with the most messages
+        primary_model = max(models, key=lambda m: models[m].get("messages", 0))
+        # Shorten: claude-opus-4-5-20251101 -> opus-4-5
+        pm = primary_model
+        pm = re.sub(r"^claude-", "", pm)
+        pm = re.sub(r"-\d{8}$", "", pm)
+        primary_model = pm
+
+    # Skills list for TL;DR
+    skills_str = ", ".join(s["skill"] for s in skills) if skills else ""
+
+    lines = []
+
+    # Hidden marker
+    lines.append(_session_marker(sid))
+    lines.append("")
+
+    # TL;DR
+    tldr_parts = [f"Session `{sid_short}`"]
+    if primary_model:
+        tldr_parts.append(primary_model)
+    tldr_parts.append(format_duration(duration))
+    tldr_parts.append(f"${cost:.2f}")
+    tldr_parts.append(f"{len(commits)} commit{'s' if len(commits) != 1 else ''}")
+    if skills_str:
+        tldr_parts.append(skills_str)
+    lines.append(f"**TL;DR:** {' | '.join(tldr_parts)}")
+    lines.append("")
+
+    # Header
+    lines.append(f"### Session `{sid_short}`")
+    lines.append("")
+    lines.append(f"- **Session ID:** `{sid}`")
+    lines.append(f"- **Branch:** `{branch}`")
+    lines.append(f"- **Duration:** {format_duration(duration)}")
+    if stats.get("started_at"):
+        lines.append(f"- **Started:** {stats['started_at']}")
+    if stats.get("ended_at"):
+        lines.append(f"- **Ended:** {stats['ended_at']}")
+    lines.append("")
+
+    # Token usage table (per-model)
+    lines.append("#### Token Usage")
+    lines.append("")
+    lines.append("| Model | Input | Output | Cache Create | Cache Read | Est. Cost |")
+    lines.append("|-------|------:|-------:|-------------:|-----------:|----------:|")
+
+    for model_name, m in models.items():
+        model_cost = estimate_cost_for_model(model_name, m)
+        short_model = re.sub(r"^claude-", "", model_name)
+        short_model = re.sub(r"-\d{8}$", "", short_model)
+        lines.append(
+            f"| {short_model} "
+            f"| {format_tokens(m.get('input_tokens', 0))} "
+            f"| {format_tokens(m.get('output_tokens', 0))} "
+            f"| {format_tokens(m.get('cache_creation_tokens', 0))} "
+            f"| {format_tokens(m.get('cache_read_tokens', 0))} "
+            f"| ${model_cost:.2f} |"
+        )
+
+    total = stats.get("total_tokens", {})
+    lines.append(
+        f"| **Total** "
+        f"| **{format_tokens(total.get('input', 0))}** "
+        f"| **{format_tokens(total.get('output', 0))}** "
+        f"| **{format_tokens(total.get('cache_creation', 0))}** "
+        f"| **{format_tokens(total.get('cache_read', 0))}** "
+        f"| **${cost:.2f}** |"
+    )
+    lines.append("")
+
+    # Subagents table
+    if subagents:
+        lines.append("#### Subagents")
+        lines.append("")
+        lines.append("| ID | Type | Model | Input | Output |")
+        lines.append("|----|------|-------|------:|-------:|")
+        for sa in subagents:
+            sa_model = sa.get("model", "")
+            sa_model_short = re.sub(r"^claude-", "", sa_model) if sa_model else "-"
+            sa_model_short = (
+                re.sub(r"-\d{8}$", "", sa_model_short) if sa_model_short != "-" else "-"
+            )
+            lines.append(
+                f"| {sa.get('id', '')} "
+                f"| {sa.get('type', '')} "
+                f"| {sa_model_short} "
+                f"| {format_tokens(sa.get('tokens', {}).get('input', 0))} "
+                f"| {format_tokens(sa.get('tokens', {}).get('output', 0))} |"
+            )
+        lines.append("")
+
+    # Skills table
+    if skills:
+        lines.append("#### Skills")
+        lines.append("")
+        lines.append("| Skill | Invocations | Status |")
+        lines.append("|-------|------------:|--------|")
+        for s in skills:
+            lines.append(
+                f"| {s['skill']} | {s.get('count', 1)} | {s.get('status', 'unknown')} |"
+            )
+        lines.append("")
+
+    # Tool usage (collapsible)
+    if tools:
+        lines.append("<details>")
+        lines.append("<summary>Tool Usage</summary>")
+        lines.append("")
+        lines.append("| Tool | Count |")
+        lines.append("|------|------:|")
+        # Sort by count descending
+        for tool_name, count in sorted(tools.items(), key=lambda x: -x[1]):
+            lines.append(f"| {tool_name} | {count} |")
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
+
+    # Workflow diagrams (mermaid)
+    if diagrams:
+        lines.append("#### Workflow Diagrams")
+        lines.append("")
+        for diagram_name, mermaid_src in diagrams.items():
+            lines.append(f"**{diagram_name}**")
+            lines.append("")
+            lines.append("```mermaid")
+            lines.append(mermaid_src)
+            lines.append("```")
+            lines.append("")
+
+    # Problems faced
+    if problems:
+        lines.append("#### Problems Faced")
+        lines.append("")
+        lines.append("| # | Problem |")
+        lines.append("|---|---------|")
+        for i, problem in enumerate(problems, 1):
+            p_text = problem if isinstance(problem, str) else str(problem)
+            lines.append(f"| {i} | {p_text} |")
+        lines.append("")
+
+    # Commits
+    if commits:
+        lines.append("#### Commits")
+        lines.append("")
+        for c in commits:
+            lines.append(f"- {c.get('message', '(no message)')}")
+        lines.append("")
+
+    # Session Data JSON (collapsible)
+    lines.append("<details>")
+    lines.append("<summary>Session Data (JSON)</summary>")
+    lines.append("")
+    lines.append("```json")
+    lines.append(json.dumps(stats, indent=2))
+    lines.append("```")
+    lines.append("")
+    lines.append("</details>")
+
+    return "\n".join(lines)
+
+
+def parse_session_data_from_comment(comment_body):
+    """Extract JSON from a comment's collapsible Session Data block.
+
+    Looks for the pattern:
+      <details>
+      <summary>Session Data (JSON)</summary>
+      ```json
+      { ... }
+      ```
+      </details>
+
+    Returns parsed dict or None if not found/parseable.
+    """
+    pattern = re.compile(
+        r"<details>\s*\n"
+        r"<summary>Session Data \(JSON\)</summary>\s*\n+"
+        r"```json\s*\n"
+        r"(.*?)"
+        r"\n```",
+        re.DOTALL,
+    )
+    m = pattern.search(comment_body)
+    if not m:
+        return None
+
+    try:
+        return json.loads(m.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def format_summary_comment(sessions):
+    """Format pinned summary from list of session stats dicts.
+
+    Always recalculates totals from the provided session data.
+    """
+    lines = []
+
+    # Marker
+    lines.append(SUMMARY_MARKER)
+    lines.append("")
+
+    # Aggregate totals
+    total_input = sum(s.get("total_tokens", {}).get("input", 0) for s in sessions)
+    total_output = sum(s.get("total_tokens", {}).get("output", 0) for s in sessions)
+    total_cache_create = sum(
+        s.get("total_tokens", {}).get("cache_creation", 0) for s in sessions
+    )
+    total_cache_read = sum(
+        s.get("total_tokens", {}).get("cache_read", 0) for s in sessions
+    )
+    total_cost = sum(s.get("estimated_cost_usd", 0.0) for s in sessions)
+    total_commits = sum(len(s.get("commits", [])) for s in sessions)
+    total_duration = sum(s.get("duration_minutes", 0) for s in sessions)
+
+    # TL;DR
+    lines.append(
+        f"**TL;DR:** {len(sessions)} sessions | "
+        f"{format_duration(total_duration)} | "
+        f"${total_cost:.2f} | "
+        f"{total_commits} commits"
+    )
+    lines.append("")
+
+    # Header
+    lines.append("### Session Summary")
+    lines.append("")
+
+    # Aggregate token usage table
+    lines.append("#### Aggregate Token Usage")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|------:|")
+    lines.append(f"| Sessions | {len(sessions)} |")
+    lines.append(f"| Total Duration | {format_duration(total_duration)} |")
+    lines.append(f"| Input Tokens | {format_tokens(total_input)} |")
+    lines.append(f"| Output Tokens | {format_tokens(total_output)} |")
+    lines.append(f"| Cache Create Tokens | {format_tokens(total_cache_create)} |")
+    lines.append(f"| Cache Read Tokens | {format_tokens(total_cache_read)} |")
+    lines.append(f"| Estimated Cost | ${total_cost:.2f} |")
+    lines.append(f"| Total Commits | {total_commits} |")
+    lines.append("")
+
+    # Session history table
+    lines.append("#### Session History")
+    lines.append("")
+    lines.append("| Session | Branch | Duration | Input | Output | Cost | Commits |")
+    lines.append("|---------|--------|----------|------:|-------:|-----:|--------:|")
+
+    for s in sessions:
+        sid_short = s.get("session_id_short", s.get("session_id", "?")[:8])
+        branch = s.get("branch", "")
+        dur = format_duration(s.get("duration_minutes", 0))
+        inp = format_tokens(s.get("total_tokens", {}).get("input", 0))
+        out = format_tokens(s.get("total_tokens", {}).get("output", 0))
+        cost = s.get("estimated_cost_usd", 0.0)
+        n_commits = len(s.get("commits", []))
+        lines.append(
+            f"| `{sid_short}` | `{branch}` | {dur} | {inp} | {out} "
+            f"| ${cost:.2f} | {n_commits} |"
+        )
+    lines.append("")
+
+    # Totals verification
+    lines.append("#### Totals Verification")
+    lines.append("")
+    lines.append(
+        f"Sum of session costs: "
+        + " + ".join(f"${s.get('estimated_cost_usd', 0.0):.2f}" for s in sessions)
+        + f" = **${total_cost:.2f}**"
+    )
+    lines.append(
+        f"Sum of session commits: "
+        + " + ".join(str(len(s.get("commits", []))) for s in sessions)
+        + f" = **{total_commits}**"
+    )
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# GitHub API helpers (via gh CLI)
+# ---------------------------------------------------------------------------
+
+
+def gh_find_comment(repo, number, marker):
+    """Find comment ID by marker text using gh CLI.
+
+    Returns comment ID (int) or None if not found.
+    """
+    import subprocess
+
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo}/issues/{number}/comments",
+        "--paginate",
+        "--jq",
+        f'.[] | select(.body | contains("{marker}")) | .id',
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            # May have multiple lines if multiple matches; take first
+            first_id = result.stdout.strip().split("\n")[0]
+            return int(first_id)
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
+        print(f"WARNING: gh_find_comment failed: {e}", file=sys.stderr)
+    return None
+
+
+def gh_post_comment(repo, number, body):
+    """Post new comment to a PR/issue, return comment ID."""
+    import subprocess
+
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo}/issues/{number}/comments",
+        "-f",
+        f"body={body}",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            resp = json.loads(result.stdout)
+            comment_id = resp.get("id")
+            print(f"Posted comment #{comment_id}", file=sys.stderr)
+            return comment_id
+        else:
+            print(f"ERROR posting comment: {result.stderr}", file=sys.stderr)
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"ERROR posting comment: {e}", file=sys.stderr)
+    return None
+
+
+def gh_update_comment(repo, comment_id, body):
+    """Update existing comment."""
+    import subprocess
+
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo}/issues/comments/{comment_id}",
+        "-X",
+        "PATCH",
+        "-f",
+        f"body={body}",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            print(f"Updated comment #{comment_id}", file=sys.stderr)
+            return True
+        else:
+            print(f"ERROR updating comment: {result.stderr}", file=sys.stderr)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        print(f"ERROR updating comment: {e}", file=sys.stderr)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Phase: comment - Post/update per-session GitHub comment
+# ---------------------------------------------------------------------------
+
+
+def phase_comment(args):
+    """Post or update a per-session comment on a GitHub PR/issue."""
+    if not args.stats_file:
+        print("ERROR: --stats-file is required for comment phase", file=sys.stderr)
+        sys.exit(1)
+
+    stats_path = Path(args.stats_file)
+    if not stats_path.is_file():
+        print(f"ERROR: stats file not found: {stats_path}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(stats_path) as f:
+        stats = json.load(f)
+
+    # Load diagrams if available
+    diagrams = None
+    if args.diagrams_file:
+        diagrams_path = Path(args.diagrams_file)
+        if diagrams_path.is_file():
+            with open(diagrams_path) as f:
+                diagrams = json.load(f)
+            print(f"Loaded diagrams from: {diagrams_path}", file=sys.stderr)
+    else:
+        # Auto-detect diagrams file next to stats file
+        auto_diagrams = stats_path.parent / (
+            stats_path.stem.replace("-stats", "") + "-diagrams.json"
+        )
+        if auto_diagrams.is_file():
+            with open(auto_diagrams) as f:
+                diagrams = json.load(f)
+            print(f"Auto-loaded diagrams from: {auto_diagrams}", file=sys.stderr)
+
+    # Also try diagrams.json in same directory
+    if diagrams is None:
+        fallback_diagrams = stats_path.parent / "diagrams.json"
+        if fallback_diagrams.is_file():
+            with open(fallback_diagrams) as f:
+                diagrams = json.load(f)
+            print(f"Auto-loaded diagrams from: {fallback_diagrams}", file=sys.stderr)
+
+    body = format_session_comment(stats, diagrams)
+
+    if getattr(args, "dry_run", False):
+        print("--- DRY RUN: Comment body ---", file=sys.stderr)
+        print(body)
+        return body
+
+    # Validate required args for posting
+    if not args.repo or not args.number:
+        print(
+            "ERROR: --repo and --number are required for posting (or use --dry-run)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    marker = _session_marker(stats.get("session_id", "unknown"))
+    existing_id = gh_find_comment(args.repo, args.number, marker)
+
+    if existing_id:
+        print(f"Found existing comment #{existing_id}, updating...", file=sys.stderr)
+        gh_update_comment(args.repo, existing_id, body)
+    else:
+        print("No existing comment found, creating new...", file=sys.stderr)
+        gh_post_comment(args.repo, args.number, body)
+
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Phase: summary - Post/update pinned summary comment
+# ---------------------------------------------------------------------------
+
+
+def phase_summary(args):
+    """Post or update a pinned summary comment that recalculates from session comments."""
+    if not args.repo or not args.number:
+        if getattr(args, "dry_run", False):
+            print(
+                "ERROR: --repo and --number are required even for dry-run summary",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(
+            "ERROR: --repo and --number are required for summary phase",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    import subprocess
+
+    # Fetch all comments on the PR/issue
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{args.repo}/issues/{args.number}/comments",
+        "--paginate",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            print(f"ERROR fetching comments: {result.stderr}", file=sys.stderr)
+            sys.exit(1)
+        all_comments = json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"ERROR fetching comments: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Find session comments (have SESSION marker but NOT SUMMARY marker)
+    sessions = []
+    for comment in all_comments:
+        body = comment.get("body", "")
+        if SESSION_MARKER_PREFIX in body and SUMMARY_MARKER not in body:
+            data = parse_session_data_from_comment(body)
+            if data:
+                sessions.append(data)
+            else:
+                print(
+                    f"WARNING: Could not parse session data from comment #{comment.get('id')}",
+                    file=sys.stderr,
+                )
+
+    if not sessions:
+        print("No session comments found, nothing to summarize.", file=sys.stderr)
+        return None
+
+    print(f"Found {len(sessions)} session comment(s)", file=sys.stderr)
+
+    body = format_summary_comment(sessions)
+
+    if getattr(args, "dry_run", False):
+        print("--- DRY RUN: Summary body ---", file=sys.stderr)
+        print(body)
+        return body
+
+    # Find existing summary comment
+    existing_id = gh_find_comment(args.repo, args.number, SUMMARY_MARKER)
+
+    if existing_id:
+        print(
+            f"Found existing summary comment #{existing_id}, updating...",
+            file=sys.stderr,
+        )
+        gh_update_comment(args.repo, existing_id, body)
+    else:
+        print("No existing summary comment found, creating new...", file=sys.stderr)
+        gh_post_comment(args.repo, args.number, body)
+
+    return body
+
+
+# ---------------------------------------------------------------------------
 # Phase: placeholders for future phases
 # ---------------------------------------------------------------------------
 
@@ -765,7 +1386,7 @@ def phase_mermaid(args):
 def phase_placeholder(phase_name, args):
     """Placeholder for phases not yet implemented."""
     print(f"Phase '{phase_name}' is not yet implemented.", file=sys.stderr)
-    print("Available phases: stats, mermaid", file=sys.stderr)
+    print("Available phases: stats, mermaid, comment, summary", file=sys.stderr)
     sys.exit(0)
 
 
@@ -1299,6 +1920,428 @@ def run_self_test():
             f"expected: {diagrams_file}",
         )
 
+    # ---- Comment / Summary phase tests ----
+    print("\n--- Comment / Summary phase tests ---", file=sys.stderr)
+
+    # Test: format_duration
+    check("format_duration 0", format_duration(0) == "0m", f"got: {format_duration(0)}")
+    check(
+        "format_duration 45",
+        format_duration(45) == "45m",
+        f"got: {format_duration(45)}",
+    )
+    check(
+        "format_duration 78",
+        format_duration(78) == "1h 18m",
+        f"got: {format_duration(78)}",
+    )
+    check(
+        "format_duration 120",
+        format_duration(120) == "2h 0m",
+        f"got: {format_duration(120)}",
+    )
+    check(
+        "format_duration 1",
+        format_duration(1) == "1m",
+        f"got: {format_duration(1)}",
+    )
+    check(
+        "format_duration 59",
+        format_duration(59) == "59m",
+        f"got: {format_duration(59)}",
+    )
+    check(
+        "format_duration 60",
+        format_duration(60) == "1h 0m",
+        f"got: {format_duration(60)}",
+    )
+    check(
+        "format_duration 1440",
+        format_duration(1440) == "24h 0m",
+        f"got: {format_duration(1440)}",
+    )
+
+    # Test: format_tokens
+    check("format_tokens 0", format_tokens(0) == "0", f"got: {format_tokens(0)}")
+    check(
+        "format_tokens 500", format_tokens(500) == "500", f"got: {format_tokens(500)}"
+    )
+    check(
+        "format_tokens 999", format_tokens(999) == "999", f"got: {format_tokens(999)}"
+    )
+    check(
+        "format_tokens 1000",
+        format_tokens(1000) == "1.0K",
+        f"got: {format_tokens(1000)}",
+    )
+    check(
+        "format_tokens 1500",
+        format_tokens(1500) == "1.5K",
+        f"got: {format_tokens(1500)}",
+    )
+    check(
+        "format_tokens 25000",
+        format_tokens(25000) == "25.0K",
+        f"got: {format_tokens(25000)}",
+    )
+    check(
+        "format_tokens 999999",
+        format_tokens(999999) == "1000.0K",
+        f"got: {format_tokens(999999)}",
+    )
+    check(
+        "format_tokens 1000000",
+        format_tokens(1000000) == "1.0M",
+        f"got: {format_tokens(1000000)}",
+    )
+    check(
+        "format_tokens 1500000",
+        format_tokens(1500000) == "1.5M",
+        f"got: {format_tokens(1500000)}",
+    )
+    check(
+        "format_tokens 458575867",
+        format_tokens(458575867) == "458.6M",
+        f"got: {format_tokens(458575867)}",
+    )
+
+    # Test: format_session_comment - verify all sections
+    test_stats = {
+        "session_id": "00b11888-7e0c-4fb0-abcd-1234567890ab",
+        "session_id_short": "00b11888",
+        "branch": "feature-test",
+        "started_at": "2026-01-01T10:00:00+00:00",
+        "ended_at": "2026-01-01T11:18:00+00:00",
+        "duration_minutes": 78,
+        "models": {
+            "claude-opus-4-6": {
+                "messages": 100,
+                "input_tokens": 50000,
+                "output_tokens": 20000,
+                "cache_creation_tokens": 10000,
+                "cache_read_tokens": 5000,
+            }
+        },
+        "total_tokens": {
+            "input": 50000,
+            "output": 20000,
+            "cache_creation": 10000,
+            "cache_read": 5000,
+        },
+        "estimated_cost_usd": 12.45,
+        "tools": {"Bash": 50, "Read": 30, "Edit": 20, "Grep": 10},
+        "skills_invoked": [
+            {"skill": "tdd:ci", "count": 3, "status": "unknown"},
+            {"skill": "rca:ci", "count": 1, "status": "unknown"},
+        ],
+        "subagents": [
+            {
+                "id": "task-0",
+                "type": "Explore",
+                "model": "claude-opus-4-6",
+                "tokens": {"input": 1000, "output": 500},
+                "description": "Research something",
+            }
+        ],
+        "commits": [
+            {"message": "Add feature X"},
+            {"message": "Fix bug Y"},
+        ],
+        "problems_faced": ["Build failed on CI", "Flaky test"],
+        "workflow_edges": {},
+    }
+
+    comment_body = format_session_comment(test_stats)
+
+    check(
+        "comment has session marker",
+        "<!-- SESSION:00b11888-7e0c-4f" in comment_body,
+        f"marker not found",
+    )
+    check(
+        "comment has TL;DR",
+        "**TL;DR:**" in comment_body,
+        "TL;DR not found",
+    )
+    check(
+        "comment TL;DR has session id",
+        "`00b11888`" in comment_body,
+        "session id not in TL;DR",
+    )
+    check(
+        "comment TL;DR has model",
+        "opus-4-6" in comment_body,
+        "model not in TL;DR",
+    )
+    check(
+        "comment TL;DR has duration",
+        "1h 18m" in comment_body,
+        "duration not in TL;DR",
+    )
+    check(
+        "comment TL;DR has cost",
+        "$12.45" in comment_body,
+        "cost not in TL;DR",
+    )
+    check(
+        "comment TL;DR has commits",
+        "2 commits" in comment_body,
+        "commits not in TL;DR",
+    )
+    check(
+        "comment TL;DR has skills",
+        "tdd:ci" in comment_body and "rca:ci" in comment_body,
+        "skills not in TL;DR",
+    )
+    check(
+        "comment has header",
+        "### Session `00b11888`" in comment_body,
+        "header not found",
+    )
+    check(
+        "comment has token usage table",
+        "#### Token Usage" in comment_body,
+        "token usage section not found",
+    )
+    check(
+        "comment has subagents",
+        "#### Subagents" in comment_body,
+        "subagents section not found",
+    )
+    check(
+        "comment has skills table",
+        "#### Skills" in comment_body,
+        "skills section not found",
+    )
+    check(
+        "comment has tool usage",
+        "Tool Usage" in comment_body and "<details>" in comment_body,
+        "tool usage section not found",
+    )
+    check(
+        "comment has problems",
+        "#### Problems Faced" in comment_body,
+        "problems section not found",
+    )
+    check(
+        "comment has commits section",
+        "#### Commits" in comment_body and "Add feature X" in comment_body,
+        "commits section not found",
+    )
+    check(
+        "comment has session data JSON",
+        "Session Data (JSON)" in comment_body,
+        "session data section not found",
+    )
+    check(
+        "comment has json block",
+        "```json" in comment_body,
+        "json block not found",
+    )
+
+    # Test with diagrams
+    test_diagrams = {"deploy": "flowchart TD\n    BUILD --> TEST"}
+    comment_with_diagrams = format_session_comment(test_stats, test_diagrams)
+    check(
+        "comment with diagrams has mermaid",
+        "```mermaid" in comment_with_diagrams,
+        "mermaid block not found",
+    )
+    check(
+        "comment with diagrams has diagram name",
+        "**deploy**" in comment_with_diagrams,
+        "diagram name not found",
+    )
+
+    # Test: parse_session_data_from_comment - round-trip
+    parsed = parse_session_data_from_comment(comment_body)
+    check(
+        "parse_session_data round-trip not None",
+        parsed is not None,
+        "parsed is None",
+    )
+    if parsed:
+        check(
+            "parse_session_data session_id",
+            parsed.get("session_id") == test_stats["session_id"],
+            f"got: {parsed.get('session_id')}",
+        )
+        check(
+            "parse_session_data cost",
+            parsed.get("estimated_cost_usd") == test_stats["estimated_cost_usd"],
+            f"got: {parsed.get('estimated_cost_usd')}",
+        )
+        check(
+            "parse_session_data total input",
+            parsed.get("total_tokens", {}).get("input")
+            == test_stats["total_tokens"]["input"],
+            f"got: {parsed.get('total_tokens', {}).get('input')}",
+        )
+        check(
+            "parse_session_data commits count",
+            len(parsed.get("commits", [])) == len(test_stats["commits"]),
+            f"got: {len(parsed.get('commits', []))}",
+        )
+
+    # Test: parse_session_data_from_comment with bad input
+    check(
+        "parse_session_data bad input",
+        parse_session_data_from_comment("no data here") is None,
+        "expected None for bad input",
+    )
+    check(
+        "parse_session_data empty",
+        parse_session_data_from_comment("") is None,
+        "expected None for empty",
+    )
+
+    # Test: format_summary_comment
+    session1 = {
+        "session_id": "sess-aaa",
+        "session_id_short": "sess-aaa",
+        "branch": "branch-a",
+        "duration_minutes": 60,
+        "total_tokens": {
+            "input": 10000,
+            "output": 5000,
+            "cache_creation": 2000,
+            "cache_read": 1000,
+        },
+        "estimated_cost_usd": 5.50,
+        "commits": [{"message": "commit 1"}],
+    }
+    session2 = {
+        "session_id": "sess-bbb",
+        "session_id_short": "sess-bbb",
+        "branch": "branch-b",
+        "duration_minutes": 30,
+        "total_tokens": {
+            "input": 8000,
+            "output": 3000,
+            "cache_creation": 1000,
+            "cache_read": 500,
+        },
+        "estimated_cost_usd": 3.25,
+        "commits": [{"message": "commit 2"}, {"message": "commit 3"}],
+    }
+
+    summary_body = format_summary_comment([session1, session2])
+
+    check(
+        "summary has marker",
+        SUMMARY_MARKER in summary_body,
+        "summary marker not found",
+    )
+    check(
+        "summary has TL;DR",
+        "**TL;DR:**" in summary_body,
+        "TL;DR not found",
+    )
+    check(
+        "summary TL;DR has session count",
+        "2 sessions" in summary_body,
+        "session count not in TL;DR",
+    )
+    check(
+        "summary has aggregate table",
+        "#### Aggregate Token Usage" in summary_body,
+        "aggregate section not found",
+    )
+    check(
+        "summary has session history",
+        "#### Session History" in summary_body,
+        "session history not found",
+    )
+    check(
+        "summary has totals verification",
+        "#### Totals Verification" in summary_body,
+        "totals verification not found",
+    )
+
+    # Verify sums match
+    expected_cost = 5.50 + 3.25
+    check(
+        "summary cost sum",
+        f"${expected_cost:.2f}" in summary_body,
+        f"expected ${expected_cost:.2f} in summary",
+    )
+    check(
+        "summary commits sum",
+        "**3**" in summary_body,
+        "expected 3 total commits in summary",
+    )
+    check(
+        "summary duration sum",
+        "1h 30m" in summary_body,
+        "expected 1h 30m total duration",
+    )
+    check(
+        "summary input tokens",
+        format_tokens(18000) in summary_body,
+        f"expected {format_tokens(18000)} input tokens",
+    )
+
+    # Test: _session_marker
+    marker = _session_marker("00b11888-7e0c-4fb0-abcd-1234567890ab")
+    check(
+        "session_marker format",
+        marker == "<!-- SESSION:00b11888-7e0c-4f -->",
+        f"got: {marker}",
+    )
+    check(
+        "session_marker short id",
+        _session_marker("abc") == "<!-- SESSION:abc -->",
+        f"got: {_session_marker('abc')}",
+    )
+
+    # Test: format_session_comment with no optional sections
+    minimal_stats = {
+        "session_id": "min-test-1234",
+        "session_id_short": "min-test",
+        "branch": "",
+        "duration_minutes": 5,
+        "models": {},
+        "total_tokens": {"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0},
+        "estimated_cost_usd": 0.0,
+        "tools": {},
+        "skills_invoked": [],
+        "subagents": [],
+        "commits": [],
+        "problems_faced": [],
+        "workflow_edges": {},
+    }
+    minimal_comment = format_session_comment(minimal_stats)
+    check(
+        "minimal comment has marker",
+        "<!-- SESSION:min-test-1234" in minimal_comment,
+        "marker not found in minimal comment",
+    )
+    check(
+        "minimal comment has TL;DR",
+        "**TL;DR:**" in minimal_comment,
+        "TL;DR not found in minimal comment",
+    )
+    check(
+        "minimal comment no subagents section",
+        "#### Subagents" not in minimal_comment,
+        "subagents should not appear when empty",
+    )
+    check(
+        "minimal comment no skills section",
+        "#### Skills" not in minimal_comment,
+        "skills should not appear when empty",
+    )
+    check(
+        "minimal comment no problems section",
+        "#### Problems Faced" not in minimal_comment,
+        "problems should not appear when empty",
+    )
+    check(
+        "minimal comment no commits section",
+        "#### Commits" not in minimal_comment,
+        "commits should not appear when empty",
+    )
+
     # Summary
     total = passed + failed
     print(f"\nSelf-test: {passed}/{total} passed", file=sys.stderr)
@@ -1327,7 +2370,11 @@ def main():
         phase_stats(args)
     elif args.phase == "mermaid":
         phase_mermaid(args)
-    elif args.phase in ("comment", "summary", "extract", "dashboard"):
+    elif args.phase == "comment":
+        phase_comment(args)
+    elif args.phase == "summary":
+        phase_summary(args)
+    elif args.phase in ("extract", "dashboard"):
         phase_placeholder(args.phase, args)
     else:
         print(f"ERROR: unknown phase '{args.phase}'", file=sys.stderr)
