@@ -321,6 +321,7 @@ flowchart LR
 ├── genai/                          GenAI observability
 │   └── genai:semantic-conventions
 ├── github/                         Repository health & analysis
+│   ├── github:my-status
 │   ├── github:last-week
 │   ├── github:issues
 │   └── github:prs
@@ -382,7 +383,6 @@ flowchart LR
 │   ├── test:run-kind
 │   └── test:run-hypershift
 ├── repo/                           Repository conventions
-│   ├── repo:commit
 │   ├── repo:pr
 │   └── repo:issue
 ├── session/                       Session analytics
@@ -390,8 +390,7 @@ flowchart LR
 │   ├── session:summary
 │   ├── session:extract
 │   └── session:dashboard
-└── testing/                        Debugging techniques
-    └── testing:kubectl-debugging
+└── testing:kubectl-debugging       Common kubectl debugging commands
 ```
 
 ## Auto-Approve Policy

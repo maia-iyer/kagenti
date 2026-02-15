@@ -568,7 +568,6 @@ This is optional but recommended for tracking development effort.
 - `git:status` - Check worktree and PR status before pushing
 - `test:review` - Review test quality
 - `test:write` - Write new tests
-- `git:commit` - Commit format
+- `git:commit` - Commit format and conventions
 - `git:rebase` - Rebase onto upstream main
-- `repo:commit` - Repository commit conventions
 - `session:post` - Post session analytics to PR
