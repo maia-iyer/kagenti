@@ -103,10 +103,7 @@ source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.13'",
     "python_full_version == '3.12.*'",
-<<<<<<< HEAD
     "python_full_version == '3.11.*'",
-=======
->>>>>>> 61e8a1f (Regenerated uv lock file to resolve CI error.)
 ]
 dependencies = [
     { name = "ansible-core", version = "2.20.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
