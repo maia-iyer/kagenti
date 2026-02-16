@@ -238,6 +238,8 @@ def parse_session_jsonl(jsonl_path):
 
     session_id = None
     git_branch = None
+    branch_counts = Counter()
+    worktree_branches = set()
 
     with open(jsonl_path, "r") as f:
         for line_num, raw_line in enumerate(f, 1):
@@ -259,8 +261,13 @@ def parse_session_jsonl(jsonl_path):
             # Extract session metadata from first user/assistant records
             if session_id is None and record.get("sessionId"):
                 session_id = record["sessionId"]
-            if git_branch is None and record.get("gitBranch"):
-                git_branch = record["gitBranch"]
+            # Track all branches seen, with worktree branches preferred
+            rec_branch = record.get("gitBranch")
+            if rec_branch:
+                branch_counts[rec_branch] += 1
+                rec_cwd = record.get("cwd", "")
+                if ".worktrees" in rec_cwd or ".worktree" in rec_cwd:
+                    worktree_branches.add(rec_branch)
 
             # Collect timestamps from all records that have them
             ts = parse_timestamp(record.get("timestamp"))
@@ -388,10 +395,21 @@ def parse_session_jsonl(jsonl_path):
 
     session_id_short = session_id[:8] if session_id else "unknown"
 
+    # Determine best branch: prefer worktree branches, then most-used
+    if worktree_branches:
+        # Pick the worktree branch with the most records
+        git_branch = max(worktree_branches, key=lambda b: branch_counts.get(b, 0))
+    elif branch_counts:
+        git_branch = branch_counts.most_common(1)[0][0]
+
+    # Collect all branches seen (for context)
+    all_branches = sorted(branch_counts.keys()) if branch_counts else []
+
     return {
         "session_id": session_id,
         "session_id_short": session_id_short,
         "branch": git_branch or "",
+        "all_branches": all_branches,
         "started_at": started_at.isoformat() if started_at else None,
         "ended_at": ended_at.isoformat() if ended_at else None,
         "duration_minutes": duration_minutes,
