@@ -149,6 +149,13 @@ EIP_COUNT=$(aws ec2 describe-addresses --region "$AWS_REGION" --query 'Addresses
 EIP_QUOTA=$(get_quota "ec2" "L-0263D0A3")
 show_quota_line "Elastic IPs" "$EIP_COUNT" "$EIP_QUOTA" 15 "ec2" "L-0263D0A3"
 
+# Count Gateway VPC Endpoints (S3/DynamoDB)
+GATEWAY_VPC_EP_COUNT=$(aws ec2 describe-vpc-endpoints --region "$AWS_REGION" \
+    --filters "Name=vpc-endpoint-type,Values=Gateway" \
+    --query 'VpcEndpoints | length(@)' --output text 2>/dev/null || echo "0")
+GATEWAY_VPC_EP_QUOTA=$(get_quota "vpc" "L-1B52E74A")
+show_quota_line "Gateway VPC endpoints per region" "$GATEWAY_VPC_EP_COUNT" "$GATEWAY_VPC_EP_QUOTA" 10 "vpc" "L-1B52E74A"
+
 echo ""
 
 # =============================================================================
