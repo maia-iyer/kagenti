@@ -59,6 +59,8 @@ async def lifespan(app: FastAPI):
             "Build reconciliation started (interval: %ds)",
             settings.build_reconciliation_interval,
         )
+    else:
+        logger.info("Build reconciliation disabled (ENABLE_BUILD_RECONCILIATION=false)")
 
     yield
 

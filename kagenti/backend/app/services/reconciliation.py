@@ -164,7 +164,12 @@ async def _reconcile_single_build(
 
 
 async def run_reconciliation_loop() -> None:
-    """Background loop that periodically reconciles builds."""
+    """Background loop that periodically reconciles builds.
+
+    The loop is sequential: sleep only starts *after* the current
+    reconciliation pass completes, so there is no risk of overlapping
+    runs even when a pass takes longer than the configured interval.
+    """
     interval = settings.build_reconciliation_interval
     # Sleep first — give the cluster time to settle after startup
     await asyncio.sleep(interval)
