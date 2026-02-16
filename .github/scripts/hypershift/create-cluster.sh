@@ -376,10 +376,46 @@ for i in {1..30}; do
     fi
 done
 
-log_info "Waiting for at least one node to be ready..."
-# Wait for at least one node to exist first
+# ── NodePool health check ─────────────────────────────────────────────────
+# Verify NodePool exists and is provisioning before waiting for nodes.
+# NodePool name pattern: <cluster-name>-<az> (e.g. mycluster-us-east-1a)
 CONTROL_PLANE_NS="clusters-$CLUSTER_NAME"
-for i in {1..60}; do
+log_info "Checking NodePool health..."
+
+NP_HEALTHY=false
+for np_check in {1..18}; do  # 3 minutes (18 x 10s)
+    NP_COUNT=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters \
+        -o jsonpath='{.items[?(@.spec.clusterName=="'"$CLUSTER_NAME"'")].metadata.name}' 2>/dev/null | wc -w | tr -d ' ' || echo "0")
+    [[ ! "$NP_COUNT" =~ ^[0-9]+$ ]] && NP_COUNT=0
+
+    if [ "$NP_COUNT" -gt 0 ]; then
+        NP_NAME=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters \
+            -o jsonpath='{.items[?(@.spec.clusterName=="'"$CLUSTER_NAME"'")].metadata.name}' 2>/dev/null | awk '{print $1}')
+        NP_DESIRED=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$NP_NAME" \
+            -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
+        log_success "NodePool '$NP_NAME' found (desired replicas: $NP_DESIRED)"
+        NP_HEALTHY=true
+        break
+    fi
+    echo "  Attempt $np_check/18 - waiting for NodePool to be created..."
+    sleep 10
+done
+
+if [ "$NP_HEALTHY" != "true" ]; then
+    log_error "No NodePool found for cluster $CLUSTER_NAME after 3 minutes"
+    echo ""
+    echo "  The HostedCluster exists but no NodePool was created."
+    echo "  This typically indicates an operator issue or resource exhaustion."
+    echo ""
+    echo "  HostedCluster conditions:"
+    KUBECONFIG="$MGMT_KUBECONFIG" oc get hostedcluster -n clusters "$CLUSTER_NAME" \
+        -o jsonpath='{range .status.conditions[*]}{.type}{": "}{.status}{" - "}{.message}{"\n"}{end}' 2>/dev/null || true
+    exit 1
+fi
+
+# ── Wait for nodes ────────────────────────────────────────────────────────
+log_info "Waiting for at least one node to be ready..."
+for i in {1..90}; do  # 15 minutes (90 x 10s)
     # Use || true to prevent pipefail from exiting on API errors during wait
     NODE_COUNT=$(oc get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ' || echo "0")
     # Validate NODE_COUNT is numeric
@@ -388,8 +424,8 @@ for i in {1..60}; do
         log_info "Found $NODE_COUNT node(s), waiting for Ready condition..."
         break
     fi
-    if [ $i -eq 60 ]; then
-        log_error "No nodes appeared after 10 minutes"
+    if [ $i -eq 90 ]; then
+        log_error "No nodes appeared after 15 minutes"
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "DIAGNOSTIC INFO"
@@ -403,10 +439,10 @@ for i in {1..60}; do
             -o jsonpath='{range .status.conditions[*]}{.type}{": "}{.status}{" - "}{.message}{"\n"}{end}' 2>/dev/null || true
         echo ""
         echo "NodePool status:"
-        KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$CLUSTER_NAME" -o wide 2>/dev/null || true
+        KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters -o wide 2>/dev/null | grep "$CLUSTER_NAME" || echo "(not found)"
         echo ""
         echo "NodePool conditions:"
-        KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$CLUSTER_NAME" \
+        KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$NP_NAME" \
             -o jsonpath='{range .status.conditions[*]}{.type}{": "}{.status}{" - "}{.message}{"\n"}{end}' 2>/dev/null || true
         echo ""
         echo "Machine status:"
@@ -423,18 +459,19 @@ for i in {1..60}; do
             --query 'Reservations[*].Instances[*].[InstanceId,State.Name,InstanceType]' \
             --output table 2>/dev/null || true
         echo ""
-        echo "Console URL: https://console-openshift-console.apps.base.octo-emerging.redhataicoe.com/multicloud/infrastructure/clusters/managed/$CLUSTER_NAME/overview"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         exit 1
     fi
     # Show status every 5 attempts
     if [ $((i % 5)) -eq 0 ]; then
         HC_PROGRESS=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get hostedcluster -n clusters "$CLUSTER_NAME" -o jsonpath='{.status.conditions[?(@.type=="Available")].message}' 2>/dev/null || echo "unknown")
-        NP_STATUS=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$CLUSTER_NAME" -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null || echo "unknown")
-        echo "  Attempt $i/60 - HostedCluster: $HC_PROGRESS"
-        echo "               - NodePool: $NP_STATUS"
+        NP_REPLICAS=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$NP_NAME" -o jsonpath='{.status.replicas}' 2>/dev/null || echo "0")
+        NP_READY=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$NP_NAME" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "unknown")
+        MACHINE_COUNT=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get machines -n "$CONTROL_PLANE_NS" --no-headers 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+        echo "  Attempt $i/90 - HostedCluster: $HC_PROGRESS"
+        echo "               - NodePool: replicas=$NP_REPLICAS ready=$NP_READY machines=$MACHINE_COUNT"
     else
-        echo "  Attempt $i/60 - waiting for nodes to appear..."
+        echo "  Attempt $i/90 - waiting for nodes to appear..."
     fi
     sleep 10
 done

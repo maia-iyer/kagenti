@@ -382,6 +382,28 @@ subjects:
   - kind: ServiceAccount
     name: pipeline
     namespace: {{ . }}
+---
+# ——————————————————————————————————————————————————————————————————————————————
+#  SCC RoleBinding for Default SA in Namespace: {{ . }}
+#  Grants privileged SCC to the default service account to allow Istio
+#  proxy-init containers that require runAsUser:0 and privileged:true
+#  for iptables setup.
+# ——————————————————————————————————————————————————————————————————————————————
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: default-privileged-scc
+  namespace: {{ . }}
+  labels:
+    {{- include "kagenti.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: {{ . }}
 {{- end }}
 {{- end }}
 {{- end }}
