@@ -7,7 +7,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package.json ./
+COPY ui-v2/package.json ./
 # Note: If using npm, use package-lock.json instead
 # COPY package-lock.json ./
 
@@ -15,7 +15,7 @@ COPY package.json ./
 RUN npm install
 
 # Copy source code
-COPY . .
+COPY ui-v2/ .
 
 # Build the application
 RUN npm run build
@@ -24,7 +24,7 @@ RUN npm run build
 FROM nginx:1.25-alpine
 
 # Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY ui-v2/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
