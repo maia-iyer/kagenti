@@ -10,7 +10,7 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /bin/uv
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY backend/pyproject.toml ./
 
 # Create virtual environment and install dependencies
 RUN uv venv /app/.venv && \
@@ -38,7 +38,7 @@ RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy application code
-COPY app/ ./app/
+COPY backend/app/ ./app/
 
 # Set environment variables
 ENV PATH="/app/.venv/bin:$PATH"
