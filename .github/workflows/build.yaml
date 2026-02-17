@@ -69,15 +69,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # This action automatically creates useful tags based on the Git event.
-      # In this case, it will use the Git tag as the Docker image tag.
+      # Extract Docker metadata with retry loop.
+      # The metadata-action calls the GitHub API which can sporadically fail
+      # with "Bad credentials" during token rotation.
       - name: Extract Docker metadata for ${{ matrix.image_config.name }}
         id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+        continue-on-error: true
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.image_config.name }}
+          tags: |
+            type=ref,event=tag
+
+      - name: Wait before retry
+        if: steps.meta.outcome == 'failure'
+        run: |
+          echo "Metadata extraction failed, retrying in 15s..."
+          sleep 15
+
+      - name: Retry Docker metadata for ${{ matrix.image_config.name }}
+        id: meta_retry
+        if: steps.meta.outcome == 'failure'
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.image_config.name }}
           tags: |
-            # extract tag from git ref, e.g., v1.0.0 -> 1.0.0
             type=ref,event=tag
 
       - name: Build and push ${{ matrix.image_config.name }}
@@ -87,8 +103,8 @@ jobs:
           file: ${{ matrix.image_config.context }}/${{ matrix.image_config.dockerfile }}
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_retry.outputs.tags || steps.meta.outputs.tags }}
+          labels: ${{ steps.meta_retry.outputs.labels || steps.meta.outputs.labels }}
 
       - name: Package and push kagenti chart
         run: |
