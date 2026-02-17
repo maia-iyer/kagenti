@@ -447,7 +447,7 @@ Kagenti provides a unified framework for identity and authorization in agentic s
 | Component | Purpose | Repository |
 |-----------|---------|------------|
 | **[Client Registration](https://github.com/kagenti/kagenti-extensions/tree/main/AuthBridge/client-registration)** | Automatic OAuth2/OIDC client provisioning using SPIFFE ID | `AuthBridge/client-registration` |
-| **[AuthProxy](https://github.com/kagenti/kagenti-extensions/tree/main/AuthBridge/AuthProxy)** | JWT validation and transparent token exchange | `AuthBridge/AuthProxy` |
+| **[AuthProxy](https://github.com/kagenti/kagenti-extensions/tree/main/AuthBridge/AuthProxy)** | Inbound JWT validation (JWKS) and outbound token exchange | `AuthBridge/AuthProxy` |
 | **[SPIRE](https://spiffe.io/docs/latest/spire-about/)** | Workload identity and attestation | External |
 | **[Keycloak](https://www.keycloak.org/)** | Identity provider and access management | External |
 
@@ -461,17 +461,28 @@ Automatically registers Kubernetes workloads as Keycloak clients at pod startup:
 
 ### AuthProxy
 
-A sidecar that validates incoming tokens and transparently exchanges them for downstream services:
+An Envoy-based sidecar that handles both **inbound JWT validation** and **outbound token exchange**, using an external processor (ext-proc) for token operations:
 
 ```
+                 Incoming request
+                       │
+                       ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│                            CALLER POD                              │
-│  ┌──────────────┐    ┌────────────────────────────────────────┐    │
-│  │              │    │         AuthProxy Sidecar:             │    │
-│  │  Application │───►│  1. Validate token Signature + Issuer  │    │
-│  │              │    │  2. Exchange token for target audience │    │
-│  │              │    │  3. Forward to Target with new token   │    │
-│  └──────────────┘    └────────────────────────────────────────┘    │
+│                          WORKLOAD POD                               │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                   AuthProxy Sidecar (Envoy + Ext Proc)      │   │
+│  │                                                             │   │
+│  │  INBOUND:  Validate JWT (signature, issuer, audience via    │   │
+│  │            JWKS). Return 401 if invalid.                    │   │
+│  │  OUTBOUND: Exchange token for target audience via Keycloak  │   │
+│  │            (RFC 8693). HTTPS traffic passes through as-is.  │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                          │              │                           │
+│                    ┌─────┘              └─────┐                     │
+│                    ▼                          ▼                     │
+│           ┌──────────────┐           ┌──────────────┐              │
+│           │  Application │           │   Keycloak   │              │
+│           └──────────────┘           └──────────────┘              │
 └────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -483,10 +494,10 @@ A sidecar that validates incoming tokens and transparently exchanges them for do
 
 **Key Features:**
 
-- **JWT Validation** using JWKS from Keycloak
-- **OAuth 2.0 Token Exchange** ([RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693))
-- **Transparent to applications** - handled by Envoy sidecar
-- **Audience scoping** - tokens are scoped to specific services
+- **Inbound JWT Validation** — Validates token signature, expiration, and issuer using JWKS keys fetched from Keycloak. Optionally validates the audience claim. Returns HTTP 401 for missing or invalid tokens.
+- **Outbound Token Exchange** — Performs [OAuth 2.0 Token Exchange (RFC 8693)](https://datatracker.ietf.org/doc/html/rfc8693) to replace the caller's token with one scoped to the target service audience
+- **Transparent to applications** — Traffic interception via iptables; no application code changes required
+- **Configuration** — Inbound validation is configured via `ISSUER` (required) and `EXPECTED_AUDIENCE` (optional) environment variables. Outbound exchange uses `TOKEN_URL`, `CLIENT_ID`, `CLIENT_SECRET`, and `TARGET_AUDIENCE`.
 
 ### SPIRE (Workload Identity)
 

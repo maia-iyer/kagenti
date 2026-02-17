@@ -617,8 +617,8 @@ The [AuthBridge Component](https://github.com/kagenti/kagenti-extensions/tree/ma
 | Capability | Description |
 |------------|-------------|
 | **Automatic Workload Identity** | Pod registers itself with Keycloak using SPIFFE ID |
-| **Token-Based Authentication** | Caller authenticates using `client_credentials` grant |
-| **Transparent Token Exchange** | Sidecar exchanges tokens for correct audience |
+| **Inbound JWT Validation** | Validates incoming token signature, expiration, and issuer via JWKS; optionally validates audience. Returns 401 for invalid tokens. |
+| **Transparent Token Exchange** | Sidecar exchanges outbound tokens for correct target audience via Keycloak |
 | **Target Service Validation** | Target validates token has correct audience |
 
 ### AuthBridge Architecture
@@ -629,8 +629,9 @@ The [AuthBridge Component](https://github.com/kagenti/kagenti-extensions/tree/ma
 │  2. Client Registration extracts SPIFFE ID and registers with Keycloak          │
 │  3. Caller gets token from Keycloak (audience: "caller's SPIFFE ID")            │
 │  4. Caller sends request to auth-target with token                              │
-│  5. Envoy intercepts,Go Processor validates Token Signature and Isusuer,        │
-│    then it exchanges token (audience: "auth-target")                            │
+│  5. Envoy intercepts; Go Processor (ext-proc) validates token signature,        │
+│     expiration, and issuer via JWKS (returns 401 if invalid), then exchanges    │
+│     token for target audience (audience: "auth-target")                         │
 │  6. Auth Target validates token and returns "authorized"                        │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
@@ -671,8 +672,7 @@ The [AuthBridge Component](https://github.com/kagenti/kagenti-extensions/tree/ma
 |-----------|------|---------|
 | **Client Registration** | Container | Registers workload with Keycloak using SPIFFE ID |
 | **SPIFFE Helper** | Container | Obtains SVID from SPIRE Agent |
-| **AuthProxy** | Sidecar | Validates JWT tokens using JWKS |
-| **Envoy + Go Processor** | Sidecar | Intercepts traffic and exchanges tokens |
+| **Envoy + Go Processor (Ext Proc)** | Sidecar | Intercepts traffic in both directions: **inbound** — validates JWT (signature, expiration, issuer, optional audience) via JWKS, returns 401 for invalid tokens; **outbound** — exchanges tokens for target audience via Keycloak |
 | **Auth Target** | Deployment | Target service that validates exchanged tokens |
 
 ### Installation and Hands-On Demo
