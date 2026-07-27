@@ -1,3 +1,7 @@
+---
+draft: true       # excluded from https://www.rossoctl.dev/
+---
+
 # Automation Health Dashboard
 
 > Last updated: 2026-07-27 13:00 ET | Programs: 3 active

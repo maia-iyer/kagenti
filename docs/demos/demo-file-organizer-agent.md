@@ -1,4 +1,8 @@
-# File Organizer Agent Demo (with Cloud Storage Tool)
+---
+description: File Organizer (with Cloud Storage Tool)
+---
+
+# File Organizer Agent
 
 This document provides detailed steps for running the **File Organizer Agent** proof-of-concept (PoC) demo.
 
@@ -12,12 +16,12 @@ Here's a breakdown of the sections:
 - In [**Import New Agent**](#import-new-agent), you'll build and deploy the [`file_organizer_agent`](https://github.com/rossoctl/examples/tree/main/a2a/file_organizer) agent.
 - In [**Import New Tool**](#import-new-tool), you'll build and deploy [`cloud_storage_tool`](https://github.com/rossoctl/examples/tree/main/mcp/cloud_storage_tool) tool.
 - In [**Validate the Deployment**](#validate-the-deployment), you'll verify that all components are running and operational.
-- In [**Chat with the Generic Agent**](#chat-with-the-generic-agent), you'll interact with the agent and confirm it correctly organizes files in the specified cloud storage bucket.
+- In [**Chat with the File Organizer Agent**](#chat-with-the-file-organizer-agent), you'll interact with the agent and confirm it correctly organizes files in the specified cloud storage bucket.
 
 > **Prerequisites:**
-> Ensure you've completed the Rossoctl platform setup as described in the [Installation Guide](../install.md).
+> Ensure you've completed the Rossoctl platform setup as described in the [Installation Guide](../getting-started/install.md).
 
-You should also open the Agent Platform Demo Dashboard as instructed in the [Accessing the UI](../install.md#accessing-the-ui) section.
+You should also open the Agent Platform Demo Dashboard as instructed in the [Accessing the UI](../getting-started/install.md#accessing-the-ui) section.
 
 ---
 
@@ -29,7 +33,7 @@ To deploy the File Organizer Agent:
 2. In the **Select Namespace to Deploy Agent** drop-down, choose the `<namespace>` where you'd like to deploy the agent. (These namespaces are defined in your `.env` file.)
 3. Under **Environment Variables**, configure LLM settings using one of these methods:
    - Click **Import .env File** and import `.env.openai` or `.env.ollama` from the agent examples repo, **or**
-   - Manually add env vars: `LLM_API_BASE`, `LLM_API_KEY`, and `LLM_MODEL` (see [Using Local Models](../local-models.md) for values)
+   - Manually add env vars: `LLM_API_BASE`, `LLM_API_KEY`, and `LLM_MODEL` (see [Using Local Models](../getting-started/local-models.md) for values)
 4. Under **Environment Variables**, also add:
    - Click `Add Environment Variable`
    - Under `Name` put `BUCKET_URI` and under `Value` put the URI of your cloud storage bucket (e.g., `s3://my-bucket-name/` for AWS S3)
@@ -43,7 +47,7 @@ To deploy the File Organizer Agent:
    - Choose: `a2a/file_organizer`
 9. Click **Build & Deploy New Agent** to deploy.
 
-**Note:** The `ollama` environmental variable set specifies `llama3.2:3b-instruct-fp16` as the default model. To download the model, run `ollama pull llama3.2:3b-instruct-fp16`. Please ensure an Ollama server is running in a separate terminal via `ollama serve`. 
+**Note:** The `ollama` environmental variable set specifies `llama3.2:3b-instruct-fp16` as the default model. To download the model, run `ollama pull llama3.2:3b-instruct-fp16`. Please ensure an Ollama server is running in a separate terminal via `ollama serve`.
 
 ---
 
@@ -78,8 +82,11 @@ To verify that both the agent and tool are running:
 1. Open a terminal and connect to your Kubernetes cluster.
 2. Use the namespace you selected during deployment to check the status of the pods:
 
+   ```bash
+   kubectl get po -n <your-ns>
+   ```
+
    ```console
-   installer$ kubectl get po -n <your-ns>
    NAME                             READY   STATUS        RESTARTS   AGE
    cloud-storage-tool-cb7566fdf-z7j8n      3/3     Running       0          29d
    file-organizer-7cc769d86c-fkwmv   3/3     Running       0          25s
@@ -88,20 +95,26 @@ To verify that both the agent and tool are running:
 3. Tail the logs to ensure both services have started successfully.
    For the agent:
 
+   ```bash
+   kubectl logs -f deployment/file-organizer -n <your-ns>
+   ```
+
    ```console
-   installer$ kubectl logs -f deployment/file-organizer -n <your-ns>
    Defaulted container "file-organizer" out of: file-organizer, spiffe-helper, rossoctl-client-registration, fix-permissions (init)
    INFO:     Started server process [14]
    INFO:     Waiting for application startup.
    INFO:     Application startup complete.
    INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-
    ```
 
    For the cloud storage tool:
+
+   ```bash
+   kubectl logs -f deployment/cloud-storage-tool -n <your-ns>
+   ```
+
    ```console
-   installer$ kubectl logs -f deployment/cloud-storage-tool -n <your-ns>
-   Defaulted container "cloud-storage-tool" out of: cloud-storage-tool, spiffe-helper, rossoctl-client-registration, fix-permissions (init)                        
+   Defaulted container "cloud-storage-tool" out of: cloud-storage-tool, spiffe-helper, rossoctl-client-registration, fix-permissions (init)
    INFO:     Started server process [14]
    INFO:     Waiting for application startup.
    INFO: StreamableHTTP session manager started
@@ -119,7 +132,7 @@ Once the deployment is complete, you can run the demo:
 
 1. Navigate to the **Agent Catalog** in the Rossoctl UI.
 2. Select the same `<namespace>` used during the agent deployment.
-3. Under [**Available Agents in <namespace>**](http://rossoctl-ui.localtest.me:8080/Agent_Catalog#available-agents-in-rossoctl-system), select `file-organizer` and click **View Details**.
+3. Under [**Available Agents in `<namespace>`**](http://rossoctl-ui.localtest.me:8080/Agent_Catalog#available-agents-in-rossoctl-system), select `file-organizer` and click **View Details**.
 4. Scroll to the bottom of the page. In the input field labeled *Say something to the agent...*, enter:
 
    ```console
@@ -142,7 +155,7 @@ Once the deployment is complete, you can run the demo:
 
 8. You can tail the log files (as shown in the [Validate the Deployment section](#validate-the-deployment)) to observe the interaction between the agent and the tool in real time.
 
-If you encounter any errors, check the [Troubleshooting Guide](../troubleshooting.md).
+If you encounter any errors, check the [Troubleshooting Guide](../users-guides/troubleshooting.md).
 
 ## Cleanup
 
@@ -151,7 +164,7 @@ respectively and click the `Delete` button next to each.
 
 You can also manually remove them from the cluster:
 
-```console
-installer$ kubectl delete deployment file-organizer cloud-storage-tool -n <your-ns>
-installer$ kubectl delete service file-organizer cloud-storage-tool -n <your-ns>
+```bash
+kubectl delete deployment file-organizer cloud-storage-tool -n <your-ns>
+kubectl delete service file-organizer cloud-storage-tool -n <your-ns>
 ```
