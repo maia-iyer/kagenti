@@ -1,3 +1,8 @@
+---
+description: Full Rossoctl installation guide.
+sidebar_label: Installation Guide
+---
+
 # Rossoctl Installation Guide
 
 This guide covers installation on both local Kind clusters and OpenShift environments.
@@ -27,24 +32,37 @@ This guide covers installation on both local Kind clusters and OpenShift environ
 
 If you're setting up a brand-new Mac, install all prerequisites at once with [Homebrew](https://brew.sh):
 
+Install Homebrew:
+
 ```bash
-# Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
 
-# Install required tools
+Install required tools:
+
+```bash
 brew install git kind kubectl helm@3
+```
 
-# Verify Helm version meets the ≥3.18.0 requirement above
+Verify Helm version meets the ≥3.18.0 requirement above:
+
+```bash
 helm version
+```
 
-# Container runtime — pick one:
+Container runtime — pick one:
+
+```bash
 brew install podman    # recommended for macOS
 # or: brew install --cask docker   # Docker Desktop
+```
 
-# If using Podman, create and start a machine with sufficient resources.
-# Use --rootful: Kind's rootless provider requires the systemd property
-# Delegate=yes, which a fresh podman machine does not configure, so cluster
-# creation fails without it.
+If using Podman, create and start a machine with sufficient resources.
+Use `--rootful`: Kind's rootless provider requires the systemd property
+`Delegate=yes`, which a fresh podman machine does not configure, so cluster
+creation fails without it.
+
+```bash
 podman machine init --rootful --memory 18432 --cpus 6
 podman machine start
 ```
@@ -193,7 +211,7 @@ shortens overall startup time on slow links by reusing the host's image cache.
 > daemon cache sidesteps the limit entirely.
 
 The list of images lives in
-[`scripts/kind/preload-images.txt`](../scripts/kind/preload-images.txt) — one
+[`scripts/kind/preload-images.txt`](https://github.com/rossoctl/rossoctl/blob/main/scripts/kind/preload-images.txt) — one
 image per line, comments with `#`. The file is intentionally focused on
 `docker.io/*` images; `ghcr.io` and `quay.io` are not rate-limited and pull
 fine on demand.
@@ -422,7 +440,7 @@ Rossoctl supports two modes for how the operator and agent workloads authenticat
 - **Client secrets (default)** — the operator uses admin credentials to register agent OAuth clients; agents authenticate with provisioned client secrets. No extra infrastructure required.
 - **SPIFFE authentication (recommended)** — the operator and agents authenticate using their SPIFFE identities (JWT-SVIDs). Requires SPIRE. Eliminates all provisioned credentials.
 
-Both modes are configured automatically during install. See the **[Authentication Guide](./authentication.md)** for full setup, configuration, and how each mode works.
+Both modes are configured automatically during install. See the **[Authentication Guide](../concepts/identity-guide.md)** for full setup, configuration, and how each mode works.
 
 ---
 
@@ -498,5 +516,5 @@ oc get clusterversion
 
 </details>
 
-For more troubleshooting tips, see [Troubleshooting Guide](./troubleshooting.md).
+For more troubleshooting tips, see [Troubleshooting Guide](../users-guides/troubleshooting.md).
 
