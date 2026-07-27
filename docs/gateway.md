@@ -4,7 +4,7 @@ draft: true       # excluded from https://www.rossoctl.dev/
 
 # MCP Gateway instructions
 
-[MCP Gateway](https://github.com/rossoctl/mcp-gateway) components are installed as part of the Rossoctl installation process
+[MCP Gateway](https://github.com/Kuadrant/mcp-gateway) components are installed as part of the Rossoctl installation process
 unless the user has explicitly opted out of it, such as via `--skip-install mcp_gateway`. This document describes how
 
 - An MCP server can be registered with the Gateway

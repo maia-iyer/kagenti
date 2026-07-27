@@ -78,7 +78,7 @@ Rossoctl is a cloud-native middleware platform that provides framework-neutral, 
 
 **Description**: Go developers who build and maintain the Envoy-based MCP Gateway that connects agents to tools via the Model Context Protocol.
 
-**Primary Repository**: [mcp-gateway](https://github.com/rossoctl/mcp-gateway)
+**Primary Repository**: [mcp-gateway](https://github.com/Kuadrant/mcp-gateway)
 
 **Key Responsibilities**:
 
@@ -99,7 +99,7 @@ Rossoctl is a cloud-native middleware platform that provides framework-neutral, 
 
 **Getting Started**:
 
-1. Clone [mcp-gateway](https://github.com/rossoctl/mcp-gateway) repository
+1. Clone [mcp-gateway](https://github.com/Kuadrant/mcp-gateway) repository
 2. Set up Go development environment
 3. Study Envoy proxy architecture and filter development
 4. Understand MCP protocol specification and implementation
@@ -387,7 +387,7 @@ Review Identity Patterns in [identity documentation](docs/concepts/identity-guid
 |------------|------------------|
 | **[rossoctl](https://github.com/rossoctl/rossoctl)** | Platform Operator, UI Developer, End User |
 | **[agent-examples](https://github.com/rossoctl/examples)** | Agent Developer, Tool Developer |
-| **[mcp-gateway](https://github.com/rossoctl/mcp-gateway)** | MCP Gateway Developer, MCP Gateway Operator |
+| **[mcp-gateway](https://github.com/Kuadrant/mcp-gateway)** | MCP Gateway Developer, MCP Gateway Operator |
 | **[rossoctl-operator](https://github.com/rossoctl/operator)** | Operator Developer, Platform Operator |
 | **[cortex](https://github.com/rossoctl/cortex)** | Extensions Developer |
 | **[agentic-control-plane](https://github.com/rossoctl/agentic-control-plane)** | Extensions Developer, Agent Developer |
