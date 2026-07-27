@@ -74,7 +74,7 @@ metadata:
   name: weather-tool-servers
   namespace: default
 spec:
-  toolPrefix: weather_
+  prefix: weather_
 
   targetRef:
     group: gateway.networking.k8s.io
@@ -216,7 +216,7 @@ metadata:
   name: slack-tool-servers
   namespace: default
 spec:
-  toolPrefix: slack_
+  prefix: slack_
   credentialRef:
     key: token
     name: slack-server-access-token
