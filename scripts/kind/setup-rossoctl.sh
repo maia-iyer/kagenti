@@ -97,7 +97,9 @@ log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error()   { echo -e "${RED}✗${NC} $1"; }
 
 version_at_least() {
-  local version="${1#v}" minimum="${2#v}"
+  # Image tags use numeric X.Y.Z releases. Reject prefixes and pre-release
+  # suffixes so a version can pass validation only if that exact tag is usable.
+  local version="$1" minimum="$2"
   local version_major version_minor version_patch
   local minimum_major minimum_minor minimum_patch
 
@@ -264,7 +266,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --with-istio        Enable full Istio ambient mesh (mTLS, waypoints)"
       echo "                      Gateway API controller is always installed as core"
       echo "  --with-spire        Install SPIRE + SPIFFE IdP setup"
-      echo "                      Override CSI with SPIFFE_CSI_DRIVER_VERSION (minimum 0.2.12)"
+      echo "                      Override CSI with SPIFFE_CSI_DRIVER_VERSION"
+      echo "                      (numeric X.Y.Z tag; minimum 0.2.12)"
       echo "  --with-backend      Install Rossoctl backend API"
       echo "  --with-ui           Install Rossoctl UI (auto-enables backend)"
       echo "  --with-mcp-gateway  Install MCP Gateway"
@@ -374,7 +377,7 @@ if $WITH_KUADRANT && ! $WITH_MCP_GATEWAY; then
 fi
 
 if $WITH_SPIRE && ! version_at_least "$SPIFFE_CSI_DRIVER_VERSION" "$SPIFFE_CSI_DRIVER_MIN_VERSION"; then
-  log_error "SPIFFE_CSI_DRIVER_VERSION must be a semantic version at least"
+  log_error "SPIFFE_CSI_DRIVER_VERSION must be a numeric X.Y.Z image tag at least"
   log_error "${SPIFFE_CSI_DRIVER_MIN_VERSION}; got ${SPIFFE_CSI_DRIVER_VERSION}"
   exit 1
 fi
