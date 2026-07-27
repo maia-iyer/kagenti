@@ -1,22 +1,23 @@
 # Link Health Report
 
-> Last scan: 2026-07-24 07:08 ET | Scan ID: 2026-07-24-001
+> Last scan: 2026-07-27 07:08 ET | Scan ID: 2026-07-27-001
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
 | Repos scanned | 25 |
-| Total links checked | 7180 |
-| Broken (internal) | 53 |
-| Broken (external) | 653 |
-| New since last scan | +139 |
-| Fixed since last scan | -62 |
+| Total links checked | 7362 |
+| Broken (internal) | 89 |
+| Broken (external) | 646 |
+| New since last scan | +103 |
+| Fixed since last scan | -74 |
 
 ## Trend (last 10 scans)
 
 | Date | Internal | External | Delta |
 |------|----------|----------|-------|
+| 07-27 | 89 | 646 | +29 |
 | 07-24 | 53 | 653 | +77 |
 | 07-20 | 28 | 601 | -26 |
 | 07-17 | 32 | 623 | -8 |
@@ -26,30 +27,28 @@
 | 06-29 | 30 | 18 | 0 |
 | 06-26 | 30 | 18 | +2 |
 | 06-24 | 29 | 17 | -1 |
-| 06-22 | 29 | 18 | +3 |
 
 ## Broken Links by Repo
 
 | Repo | Internal | External | Issues |
 |------|----------|----------|--------|
-| .github | 0 | 2 | 0 |
-| OpenShell | 0 | 7 | 0 |
-| adk | 25 | 8 | 0 |
+| .github | 5 | 2 | 0 |
+| OpenShell | 0 | 5 | 0 |
+| adk | 25 | 7 | 0 |
 | agent-examples | 0 | 2 | 0 |
 | agent-skills | 3 | 0 | 0 |
 | agentic-control-plane | 1 | 0 | 0 |
 | automation | 1 | 0 | 0 |
-| cortex | 0 | 1 | 0 |
+| cortex | 11 | 1 | 0 |
 | ecosystem-guide | 0 | 7 | 0 |
 | examples | 0 | 2 | 0 |
 | kagenti | 4 | 6 | 0 |
-| kagenti-extensions | 0 | 1 | 0 |
+| kagenti-extensions | 11 | 1 | 0 |
 | kagenti-operator | 1 | 0 | 0 |
-| openshell-driver-openshift | 1 | 0 | 0 |
 | operator | 1 | 0 | 0 |
-| pi | 0 | 609 | 0 |
-| rossoctl | 4 | 6 | 0 |
-| serverless-harness | 9 | 2 | 0 |
+| pi | 0 | 600 | 0 |
+| rossoctl | 5 | 11 | 0 |
+| serverless-harness | 18 | 2 | 0 |
 | workload-harness | 3 | 0 | 0 |
 
 
