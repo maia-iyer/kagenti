@@ -1,8 +1,11 @@
 ---
+sidebar_label: Cortex
 description: Introduction to Zero-Trust.
 ---
 
-# Identity, Authentication, & Authorization
+# Cortex
+
+**_Identity, Authentication, & Authorization_**
 
 This comprehensive guide covers all aspects of identity, authentication, and authorization in the Rossoctl platform. Rossoctl implements a **Zero-Trust Architecture** that combines SPIFFE/SPIRE workload identity, OAuth2 token exchange, and Keycloak identity management to provide secure, scalable, and dynamic authentication for cloud-native AI agents.
 
