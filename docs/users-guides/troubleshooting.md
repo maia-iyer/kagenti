@@ -144,7 +144,7 @@ Then try the prompt again.
 
 ### Keycloak shows connection errors
 
-Keycloak logs show [connection errors](https://github.com/rossoctl/rossoctl/issues/115) to Postgres, typically after the cluster has been running for an extended period (a day or more). The suspected cause is that Keycloak's connection pool drops the Postgres connection and, on reconnect, retries with SSL enabled — which the in-cluster Postgres instance isn't configured to expect, so the handshake fails immediately. This is still under investigation upstream.
+Keycloak logs show [connection errors](https://github.com/rossoctl/rossoctl/issues/115) to Postgres, typically after the cluster has been running for an extended period (a day or more). The root cause isn't fully understood — see the linked issue for the investigation history.
 
 At this time there is no reliable sequence of bringing down and up again
 postgres and keycloak. The only reliable approach found so far is either to destroy and re-install
