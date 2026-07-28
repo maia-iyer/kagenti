@@ -51,14 +51,6 @@ A few problem fixes might include:
   kind delete cluster --name agent-platform
   ```
 
-### Docker daemon issues when using Colima instead of Docker Desktop
-
-If you use [Colima](https://github.com/abiosoft/colima) instead of Docker Desktop, the installer and other `docker` commands may fail to reach the daemon because `DOCKER_HOST` isn't pointed at Colima's socket. Set it before running the installer:
-
-```shell
-export DOCKER_HOST="unix://$HOME/.colima/docker.sock"
-```
-
 ### Blank UI page on macOS after installation
 
 On macOS, if **Privacy and Content Restrictions** are enabled (under System Settings → Screen Time → Content & Privacy Restrictions), then after the Rossoctl installation completes, opening the UI may display a blank loading page.
