@@ -203,7 +203,7 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
 │  6. Target receives request with exchanged token and validates audience         │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-  Operator                   Agent Pod             Keycloak              Target
+  Operator                   RossoCortex           Keycloak              Target
        │                         │                     │                    │
        │ 1. Watch workload       │                     │                    │
        │ 2. Register client      │                     │                    │
