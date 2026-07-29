@@ -408,6 +408,19 @@ def get_mlflow_client():
     return _mlflow_client
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    """Check if an exception represents an HTTP 401/403 auth failure.
+
+    Inspects the response status code on the exception or its cause.
+    """
+    for candidate in (exc, exc.__cause__):
+        response = getattr(candidate, "response", None)
+        status = getattr(response, "status_code", None) if response else None
+        if status in (401, 403):
+            return True
+    return False
+
+
 def get_all_traces() -> list[dict[str, Any]]:
     """Get all traces from MLflow using Python client.
 
@@ -430,8 +443,7 @@ def get_all_traces() -> list[dict[str, Any]]:
                 traces = client.search_traces(locations=[exp.experiment_id])
                 all_traces.extend(traces)
             except Exception as e:
-                err_msg = str(e)
-                if any(s in err_msg for s in ("401", "403", "Unauthorized")):
+                if _is_auth_error(e):
                     raise MLflowAuthError(
                         "MLFLOW_TRACKING_TOKEN may be missing or expired"
                     ) from e
@@ -442,6 +454,11 @@ def get_all_traces() -> list[dict[str, Any]]:
         # Re-raise configuration errors
         raise
     except Exception as e:
+        # Surface auth errors from search_experiments or other top-level calls
+        if _is_auth_error(e):
+            raise MLflowAuthError(
+                "MLFLOW_TRACKING_TOKEN may be missing or expired"
+            ) from e
         logger.error(f"Failed to get traces: {e}")
         import traceback
 
@@ -807,6 +824,10 @@ def traces_available(mlflow_configured):
         logger.info(f"Found {len(traces)} traces, proceeding with tests")
         return traces
     except MLflowAuthError as e:
+        # Most likely the mlflow-oauth-secret-job hasn't completed yet
+        # (preflight warns but doesn't block on timeout). Could also
+        # mask a real auth regression — TODO: add token validation to
+        # preflight so we can pytest.fail here instead.
         pytest.skip(
             f"MLflow auth failed: {e}. "
             "Ensure mlflow-oauth-secret-job completed before tests."
