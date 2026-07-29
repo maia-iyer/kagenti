@@ -4,18 +4,18 @@ draft: true       # excluded from https://www.rossoctl.dev/
 
 # Rossoctl Documentation
 
-This directory contains the official Rossoctl project documentation. 
+This directory contains the official Rossoctl project documentation.
 
 ## Getting Started
 
-If you are new to Rossoctl, we recommend the following flow to get started with a local Kind cluster. 
+If you are new to Rossoctl, we recommend the following flow to get started with a local Kind cluster.
 
 1. [Installation Guide](./install.md): Step-by-step instructions to start a Kind cluster and install all prerequisite components
 2. [Quickstart Weather Agent](https://github.com/rossoctl/cortex/blob/main/authbridge/demos/weather-agent/demo-ui.md): Deploy your first agent with AuthBridge security.
 
-Rossoctl is built on existing open-source cloud-native technologies. 
+Rossoctl is built on existing open-source cloud-native technologies.
 
-- [Architecture Overview](./concepts/tech-details.md) gives a high-level look at the existing technologies. 
+- [Architecture Overview](./concepts/tech-details.md) gives a high-level look at the existing technologies.
 
 ## Demos and Tutorials
 
@@ -28,10 +28,10 @@ For a complete list of available demos and tutorials, see the [Demos Documentati
 
 ## Core Concepts
 
-Through this incubation project, we have identified several core components: 
+Through this incubation project, we have identified several core components:
 
-- [MCP Gateway](./gateway.md) offers a quickstart to using the MCP Gateway. You may also find more information in [our mcp-gateway repo](https://github.com/rossoctl/mcp-gateway).
-- [Identity and Security](./identity-guide.md) provides deeper overview on the various security tools that help implement zero-trust security from the platform level. 
+- [MCP Gateway](./gateway.md) offers a quickstart to using the MCP Gateway. You may also find more information in [our mcp-gateway repo](https://github.com/Kuadrant/mcp-gateway).
+- [Identity and Security](./identity-guide.md) provides deeper overview on the various security tools that help implement zero-trust security from the platform level.
 
 ## Develop with Rossoctl
 
@@ -44,6 +44,6 @@ This repo provides a UI to interface with the operator and deployed agents and t
 
 ## Community
 
-For additional queries, join us on [Slack](https://ibm.biz/rossoctl-slack). 
+For additional queries, join us on [Slack](https://ibm.biz/rossoctl-slack).
 
-If you would like to contribute, feel free to submit a pull request! Please see our [CONTRIBUTING guidelines](../CONTRIBUTING.md). 
+If you would like to contribute, feel free to submit a pull request! Please see our [CONTRIBUTING guidelines](../CONTRIBUTING.md).

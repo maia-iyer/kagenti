@@ -18,7 +18,7 @@ The Rossoctl organization consists of the following repositories:
 |------------|----------|-------------|
 | **[rossoctl](https://github.com/rossoctl/rossoctl)** | Python | UI dashboard and documentation |
 | **[rossoctl-operator](https://github.com/rossoctl/operator)** | Go | Kubernetes operator for agent/tool lifecycle management |
-| **[mcp-gateway](https://github.com/rossoctl/mcp-gateway)** | Go | Envoy-based MCP Gateway for tool federation |
+| **[mcp-gateway](https://github.com/Kuadrant/mcp-gateway)** | Go | Envoy-based MCP Gateway for tool federation |
 | **[agent-examples](https://github.com/rossoctl/examples)** | Python | Sample agents and tools for the platform |
 | **[cortex](https://github.com/rossoctl/cortex)** | Go | Extensions and plugins |
 | **[agentic-control-plane](https://github.com/rossoctl/agentic-control-plane)** | Python | Control plane of specialized A2A agents |
@@ -193,7 +193,7 @@ kind: MCPServerRegistration
 metadata:
   name: weather-tool-servers
 spec:
-  toolPrefix: weather_
+  prefix: weather_
   targetRef:
     group: gateway.networking.k8s.io
     kind: HTTPRoute

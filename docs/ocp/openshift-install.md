@@ -105,7 +105,7 @@ Preview what commands would execute without running them:
 | `--with-agent-sandbox` | Install agent-sandbox controller |
 | `--operator-repo PATH` | Local path to rossoctl-operator repo |
 | `--operator-image IMG:TAG` | Custom operator image |
-| `--mcp-gateway-version VER` | MCP Gateway chart version (default: `0.5.1`) |
+| `--mcp-gateway-version VER` | MCP Gateway chart version (default: `0.7.1`) |
 | `--show-secrets` | Print Keycloak credentials to stdout |
 | `--dry-run` | Show commands without executing |
 
