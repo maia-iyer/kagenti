@@ -99,6 +99,16 @@ This directory contains Mermaid sequence diagrams that illustrate the authentica
 - External API returns data to tool
 - Tool returns processed data to agent
 
+### 8. AuthBridge Architecture Flow
+**File**: `08-authbridge-architecture-flow.mmd`
+**Description**: Shows how the operator, RossoCortex (agent + Envoy sidecar), Keycloak, and the target service participate in the AuthBridge zero-trust request flow.
+
+**Key Steps**:
+- Operator reconciles AgentRuntime CRs and registers the client with Keycloak
+- RossoCortex gets a token from Keycloak and sends a request to the target with it
+- Envoy+ext-proc validates the token and exchanges it for the target audience
+- Target receives the request with the exchanged token and validates the audience
+
 ## Generating Images
 
 ### Option 1: Online Editor

@@ -192,7 +192,22 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
 
 #### AuthBridge Architecture
 
-```
+1. Operator reconciles AgentRuntime CRs and labels target workloads
+2. Operator registers client with Keycloak
+3. Agent gets token from Keycloak
+4. Agent sends request to target with token
+5. Envoy+ext-proc intercepts: validates token signature, expiration, issuer via JWKS (returns 401 if invalid), then exchanges token for target audience
+6. Target receives request with exchanged token and validates audience
+
+![AuthBridge Architecture Flow](../diagrams/images/png/08-authbridge-architecture-flow.png)
+
+_Figure: AuthBridge Architecture Flow - Shows how the operator, RossoCortex (agent + Envoy sidecar), Keycloak, and the target service participate in the zero-trust request flow_
+
+[View Mermaid Source Code](../diagrams/08-authbridge-architecture-flow.mmd)
+
+<!--
+Original ASCII art, kept for reference:
+
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │  1. Operator reconciles AgentRuntime CRs and labels target workloads            │
 │  2. Operator registers client with Keycloak                                     │
@@ -227,7 +242,7 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
        │         │              ││─────────────────────┼───────────────────►│
        │         └──────────────┘│                     │  6. Validate aud   │
        │                         │                     │       "authorized" │
-```
+-->
 
 #### AuthBridge Components
 
