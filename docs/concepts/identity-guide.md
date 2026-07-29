@@ -194,8 +194,7 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │  1. Operator reconciles AgentRuntime CRs and labels target workloads            │
-│  2. Operator registers client with Keycloak and creates credentials secret      │
-│     in agent namespace                                                          │
+│  2. Operator registers client with Keycloak                                     │
 │  3. Agent gets token from Keycloak                                              │
 │  4. Agent sends request to target with token                                    │
 │  5. Envoy+ext-proc intercepts: validates token signature, expiration, issuer    │
@@ -208,9 +207,6 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
        │ 1. Watch workload       │                     │                    │
        │ 2. Register client      │                     │                    │
        ├─────────────────────────┼────────────────────►│                    │
-       │                         │                     │                    │
-       │ Create credentials      │                     │                    │
-       │ secret in agent ns      │                     │                    │
        │                         │                     │                    │
        │              ┌─────────┐│  3. Get token       │                    │
        │              │  Agent  ││────────────────────►│                    │
