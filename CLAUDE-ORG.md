@@ -193,7 +193,7 @@ kind: MCPServerRegistration
 metadata:
   name: weather-tool-servers
 spec:
-  toolPrefix: weather_
+  prefix: weather_
   targetRef:
     group: gateway.networking.k8s.io
     kind: HTTPRoute

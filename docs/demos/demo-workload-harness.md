@@ -505,7 +505,7 @@ Then edit the .env file as needed.
 | Environment Variable | Default | Description |
 | --- | --- | --- |
 | `USE_MCP_GATEWAY` | `false` | Route MCP traffic through the MCP Gateway instead of connecting directly to the MCP server. |
-| `EXGENTIC_MCP_TOOL_PREFIX` | `(empty)` | Prefix prepended to MCP tool names. Set to match the gateway's `MCPServerRegistration.spec.toolPrefix` (e.g. `exgentic_`). |
+| `EXGENTIC_MCP_TOOL_PREFIX` | `(empty)` | Prefix prepended to MCP tool names. Set to match the gateway's `MCPServerRegistration.spec.prefix` (e.g. `exgentic_`). |
 
 ### Advanced Configuration
 
