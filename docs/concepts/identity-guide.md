@@ -172,7 +172,7 @@ kubectl get secret keycloak-initial-admin -n keycloak -o go-template=\
 
 Keycloak client registration is handled automatically when "☑ Secure with AuthBridge" is selected during deployment.  This is fully automatic and requires no manual intervention or init containers.
 
-Internally,  registration is handled by the rossoctl-operator's `ClientRegistrationReconciler`.
+Internally, registration is handled by the rossoctl-operator's `ClientRegistrationReconciler`.
 
 ---
 
@@ -194,17 +194,16 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │  1. Operator reconciles AgentRuntime CRs and labels target workloads            │
-│  2. Operator registers client with Keycloak (using admin credentials from       │
-│     operator namespace) and creates credentials secret in agent namespace       │
-│  3. (removed)                                                                   │
-│  4. Agent gets token from Keycloak using credentials from secret                │
-│  5. Agent sends request to target with token                                    │
-│  6. Envoy+ext-proc intercepts: validates token signature, expiration, issuer    │
+│  2. Operator registers client with Keycloak and creates credentials secret      │
+│     in agent namespace                                                          │
+│  3. Agent gets token from Keycloak                                              │
+│  4. Agent sends request to target with token                                    │
+│  5. Envoy+ext-proc intercepts: validates token signature, expiration, issuer    │
 │     via JWKS (returns 401 if invalid), then exchanges token for target audience │
-│  7. Target receives request with exchanged token and validates audience         │
+│  6. Target receives request with exchanged token and validates audience         │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-  Operator                   SPIRE Agent           Keycloak              Target
+  Operator                   Agent Pod             Keycloak              Target
        │                         │                     │                    │
        │ 1. Watch workload       │                     │                    │
        │ 2. Register client      │                     │                    │
@@ -213,29 +212,23 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
        │ Create credentials      │                     │                    │
        │ secret in agent ns      │                     │                    │
        │                         │                     │                    │
-       │              ┌─────────┐│  3. Get SVID        │                    │
-       │              │ SPIFFE  ││◄────────────────────┤                    │
-       │              │ Helper  ││                     │                    │
-       │              └─────────┘│                     │                    │
-       │                    │    │                     │                    │
-       │              ┌─────────┐│                     │                    │
-       │              │  Agent  ││  4. Get token       │                    │
-       │              │         ││────────────────────►│                    │
+       │              ┌─────────┐│  3. Get token       │                    │
+       │              │  Agent  ││────────────────────►│                    │
        │              │         ││◄────────────────────│                    │
        │              │         ││  (aud: agent's ID)  │                    │
        │              │         ││                     │                    │
-       │              │         ││  5. Request + token │                    │
+       │              │         ││  4. Request + token │                    │
        │              │         ││─────────────────────┼───────────────────►│
        │              └─────────┘│                     │                    │
        │                    │    │                     │                    │
        │         ┌──────────────┐│                     │                    │
-       │         │ Envoy+ext-pr ││  6. Validate &      │                    │
+       │         │ Envoy+ext-pr ││  5. Validate &      │                    │
        │         │              ││     Exchange token  │                    │
        │         │              ││────────────────────►│                    │
        │         │              ││◄────────────────────│                    │
        │         │              ││  (aud: target)      │                    │
        │         │              ││─────────────────────┼───────────────────►│
-       │         └──────────────┘│                     │  7. Validate aud   │
+       │         └──────────────┘│                     │  6. Validate aud   │
        │                         │                     │       "authorized" │
 ```
 
@@ -276,37 +269,11 @@ For complete documentation, see:
 - (optional) MCP Gateway: http://mcp-gateway.localtest.me:8080/mcp
 
 #### Default Credentials
+
+> Applies only to local/dev deployments where Rossoctl provisions Keycloak for you (e.g. Kind). Production deployments should not rely on default credentials.
+
 ```yaml
 # Keycloak Admin — run ./.github/scripts/local-setup/show-services.sh for actual credentials
-```
-
-#### Common SPIFFE IDs
-
-Using local kind:
-
-```bash
-# Agents
-spiffe://localtest.me/ns/team/sa/slack-researcher
-spiffe://localtest.me/ns/team/sa/weather-service
-spiffe://localtest.me/ns/team/sa/github-issue-agent
-
-# Tools
-spiffe://localtest.me/ns/team/sa/slack-tool
-spiffe://localtest.me/ns/team/sa/weather-tool
-spiffe://localtest.me/ns/team/sa/github-tool
-
-# Infrastructure
-spiffe://localtest.me/ns/gateway-system/sa/mcp-gateway
-spiffe://localtest.me/ns/rossoctl-system/sa/operator
-```
-
-Using OpenShift:
-
-```bash
-# Agents
-spiffe://apps.cluster-swkz5.dynamic.redhatworkshops.io/ns/team/sa/slack-researcher
-spiffe://apps.cluster-swkz5.dynamic.redhatworkshops.io/ns/team/sa/weather-service
-spiffe://apps.cluster-swkz5.dynamic.redhatworkshops.io/ns/team/sa/github-issue-agent
 ```
 
 #### Token Exchange Endpoints
