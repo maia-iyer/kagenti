@@ -210,3 +210,51 @@ class TestSelectRoutePort:
         from app.core.constants import DEFAULT_IN_CLUSTER_PORT
 
         assert select_route_port([]) == DEFAULT_IN_CLUSTER_PORT
+
+
+class TestCreateOpenShiftRoute:
+    """Test cases for create_openshift_route() targetPort resolution."""
+
+    def _service(self, ports):
+        return {"spec": {"ports": ports}}
+
+    def test_named_port_uses_name_as_target_port(self, kubernetes_service):
+        """Route targetPort must reference the Service port by name when named,
+        otherwise the OpenShift router returns 503."""
+        from app.utils.routes import create_openshift_route
+
+        kubernetes_service.get_service = MagicMock(
+            return_value=self._service([{"name": "http", "port": 8080, "target_port": 8000}])
+        )
+        kubernetes_service.create_custom_resource = MagicMock()
+
+        create_openshift_route(kubernetes_service, "my-agent", "team1", "my-agent", 8080)
+
+        body = kubernetes_service.create_custom_resource.call_args.kwargs["body"]
+        assert body["spec"]["port"]["targetPort"] == "http"
+
+    def test_unnamed_port_falls_back_to_number(self, kubernetes_service):
+        from app.utils.routes import create_openshift_route
+
+        kubernetes_service.get_service = MagicMock(
+            return_value=self._service([{"port": 8000, "target_port": 8000}])
+        )
+        kubernetes_service.create_custom_resource = MagicMock()
+
+        create_openshift_route(kubernetes_service, "my-tool", "team1", "my-tool", 8000)
+
+        body = kubernetes_service.create_custom_resource.call_args.kwargs["body"]
+        assert body["spec"]["port"]["targetPort"] == 8000
+
+    def test_service_lookup_failure_falls_back_to_number(self, kubernetes_service):
+        from app.utils.routes import create_openshift_route
+
+        kubernetes_service.get_service = MagicMock(
+            side_effect=ApiException(status=404, reason="Not Found")
+        )
+        kubernetes_service.create_custom_resource = MagicMock()
+
+        create_openshift_route(kubernetes_service, "my-agent", "team1", "my-agent", 8080)
+
+        body = kubernetes_service.create_custom_resource.call_args.kwargs["body"]
+        assert body["spec"]["port"]["targetPort"] == 8080
