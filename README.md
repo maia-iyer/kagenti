@@ -138,4 +138,4 @@ To reach the maintainer team, email **rossoctl-maintainers@googlegroups.com** or
 
 This QR Code links to <https://rossoctl.dev>
 
-![rossoctl.dev QR Code](./docs/images/Rossoctl.QRcode.png)
+<img src="./docs/images/Rossoctl.QRcode.png" alt="rossoctl.dev QR Code" width="200"/>
