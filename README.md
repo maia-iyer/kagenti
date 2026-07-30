@@ -134,8 +134,8 @@ To reach the maintainer team, email **rossoctl-maintainers@googlegroups.com** or
 
 [Apache 2.0](./LICENSE)
 
-## QR Code for Rossoctl.io
+## QR Code for rossoctl.dev
 
-This QR Code links to <http://rossoctl.io>
+This QR Code links to <https://rossoctl.dev>
 
-![Rossoctl.io QR Code](./docs/images/Rossoctl.QRcode.png)
+![rossoctl.dev QR Code](./docs/images/Rossoctl.QRcode.png)
