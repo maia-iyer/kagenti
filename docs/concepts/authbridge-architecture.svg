@@ -81,8 +81,8 @@
   <text x="510" y="476" text-anchor="middle" fill="#7f1d1d" font-size="13">Forward with exchanged token</text>
 
   <!-- Step 6: Target validates audience -->
-  <rect x="600" y="512" width="180" height="60" rx="10" fill="#fca5a5" stroke="#b91c1c" stroke-width="2"/>
-  <text x="690" y="536" text-anchor="middle" fill="#7f1d1d" font-size="13" font-weight="bold">6. Validate audience</text>
+  <rect x="600" y="512" width="180" height="60" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="690" y="536" text-anchor="middle" fill="#7f1d1d" font-size="13">6. Validate audience</text>
   <text x="690" y="554" text-anchor="middle" fill="#7f1d1d" font-size="12">&#8220;authorized&#8221;</text>
 
   <!-- Footer boxes -->
