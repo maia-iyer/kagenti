@@ -1,13 +1,13 @@
 ---
-description: Stress-test Rossoctl and evaluate load.
-sidebar_label: Run well-known benchmarks
+description: Run the gsm8k, tau2, and appworld benchmarks against Rossoctl agents.
+sidebar_label: Run Well-Known Benchmarks
 ---
 
-### Rossoctl Workload Harness
+### Run Well-Known Benchmarks Demo
 
-Workload harnesses drive test and evaluation traffic to Rossoctl agents. The current implementation is the **Exgentic A2A Runner** — a standalone Python runner that integrates Exgentic benchmarks with Rossoctl agents using the A2A (Agent-to-Agent) protocol.
+This demo runs three well-known agent benchmarks — [`gsm8k`](#benchmarks), [`tau2`](#benchmarks), and [`appworld`](#benchmarks) — against Rossoctl agents to exercise them under realistic load and validate that the platform is reliable, scalable, and observable.
 
-The harness exists to robustly exercise agents and validate that the Rossoctl platform is reliable, scalable, and observable.
+It is driven by a **workload harness** that sends test and evaluation traffic to Rossoctl agents. The current implementation is the **Exgentic A2A Runner** — a standalone Python runner that integrates Exgentic benchmarks with Rossoctl agents using the A2A (Agent-to-Agent) protocol.
 
 #### Features
 
