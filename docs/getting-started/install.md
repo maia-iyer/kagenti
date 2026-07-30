@@ -1,15 +1,23 @@
 ---
+title: Install on Kubernetes
 description: Full Rossoctl installation guide.
-sidebar_label: Installation Guide
+sidebar_label: Install (Kubernetes)
+sidebar_position: 1
 ---
 
-# Rossoctl Installation Guide
+:::tip
 
-This guide covers installation on both local Kind clusters and OpenShift environments.
+This document describes rossoctl's Kubernetes deployment. Check back in August for a guide to local rossoctl without Kubernetes.
 
-## Table of Contents
+:::
 
-- [Prerequisites](#prerequisites)
+### Kubernetes Rossoctl Installation Guide
+
+This guide covers installation on both local [Kind](https://kind.sigs.k8s.io) clusters and OpenShift environments.
+
+### Table of Contents
+
+- [Kubernetes Prerequisites](#prerequisites)
   - [macOS Quick Start (New Machine)](#macos-quick-start-new-machine)
 - [Kind Installation (Local Development)](#kind-installation-local-development)
 - [OpenShift Installation](#openshift-installation)
@@ -18,17 +26,18 @@ This guide covers installation on both local Kind clusters and OpenShift environ
 
 ---
 
-## Prerequisites
+### Prerequisites
 
-### Common Requirements
+#### Common Requirements
 
 | Tool | Version | Purpose |
 |------|---------|---------|
 | kubectl | ≥1.32.1 | Kubernetes CLI |
 | [Helm](https://helm.sh/docs/intro/install/) | ≥3.18.0, <4 | Package manager for Kubernetes |
 | git | ≥2.48.0 | Cloning repositories |
+| ollama | ≥v0.11.0 | Running inference without a cloud-based LLM account |
 
-### macOS Quick Start (New Machine)
+#### macOS Quick Start (New Machine)
 
 If you're setting up a brand-new Mac, install all prerequisites at once with [Homebrew](https://brew.sh):
 
@@ -41,13 +50,7 @@ Install Homebrew:
 Install required tools:
 
 ```bash
-brew install git kind kubectl helm@3
-```
-
-Verify Helm version meets the ≥3.18.0 requirement above:
-
-```bash
-helm version
+brew install git kind kubectl helm@3 ollama
 ```
 
 Container runtime — pick one:
@@ -67,7 +70,7 @@ podman machine init --rootful --memory 18432 --cpus 6
 podman machine start
 ```
 
-### Kind-Specific Requirements
+#### Kind-Specific Requirements
 
 | Tool | Purpose |
 |------|---------|
@@ -113,7 +116,7 @@ kind delete cluster --name rossoctl
 scripts/kind/setup-rossoctl.sh --with-istio --with-spire --with-ui --with-backend
 ```
 
-### OpenShift-Specific Requirements
+#### OpenShift-Specific Requirements
 
 | Tool | Purpose |
 |------|---------|
@@ -122,9 +125,9 @@ scripts/kind/setup-rossoctl.sh --with-istio --with-spire --with-ui --with-backen
 
 ---
 
-## Kind Installation (Local Development)
+### Kind Installation (Local Development)
 
-### Quick Start
+#### Quick Start
 
 ```bash
 # Clone the repository
@@ -199,16 +202,7 @@ scripts/kind/setup-rossoctl.sh --with-istio --with-spire --with-builds
 
 The `--preload-images` flag pulls third-party container images onto the host
 ahead of time and side-loads them into the Kind control-plane node. This avoids
-Docker Hub anonymous-pull rate limits (which can stall a fresh install when
-Istio, Phoenix, OTel collector, and other images are pulled in parallel) and
-shortens overall startup time on slow links by reusing the host's image cache.
-
-> **Why this exists:** the original motivation is shared-NAT environments such
-> as office buildings, conference Wi-Fi, or VPNs, where many users appear to
-> Docker Hub as a single IP and quickly trip the anonymous pull-rate limit.
-> A fresh install pulls dozens of `docker.io/*` images in parallel and is
-> especially likely to hit the cap. Preloading from the host's authenticated
-> daemon cache sidesteps the limit entirely.
+Docker Hub anonymous-pull rate limits.
 
 The list of images lives in
 [`scripts/kind/preload-images.txt`](https://github.com/rossoctl/rossoctl/blob/main/scripts/kind/preload-images.txt) — one
@@ -220,23 +214,6 @@ fine on demand.
 # Use during a full install
 scripts/kind/setup-rossoctl.sh --with-all --preload-images
 ```
-
-How it works:
-
-1. Pulls every image in `preload-images.txt` to the host (in parallel for
-   Docker, sequential for Podman).
-2. Bundles them into a single tar via `docker save` / `podman save`.
-3. Copies the tar into the Kind control-plane container and imports it with
-   `ctr --namespace=k8s.io images import`. The load runs in the background so
-   it overlaps with the rest of the install.
-
-Failures during pull are non-fatal — the installer logs a warning and lets
-pods fall back to pulling on demand.
-
-When updating image versions, keep `preload-images.txt` in sync with the
-versions referenced in `scripts/kind/setup-rossoctl.sh` and the
-`charts/rossoctl-deps/templates/` manifests, otherwise pods will still pull
-the un-preloaded versions at runtime.
 
 #### Providing Secrets
 
@@ -268,7 +245,7 @@ scripts/kind/cleanup-rossoctl.sh
 scripts/kind/cleanup-rossoctl.sh --destroy-cluster
 ```
 
-### Using an Existing Kubernetes Cluster
+#### Using an Existing Kubernetes Cluster
 
 If you have an existing Kind cluster:
 
@@ -280,11 +257,11 @@ For non-Kind clusters, see the [OpenShift installation](#openshift-installation)
 
 ---
 
-## OpenShift Installation
+### OpenShift Installation
 
-Both Ollama (local models) and OpenAI are supported as LLM backends. See the [Local Models Guide](local-models.md) for setup details.
+Both Ollama (local models) and OpenAI are supported as LLM backends. See the [Local Models Guide](llms/local-models.md) for Ollama setup details.
 
-### Option A: Bash Installer (Recommended)
+#### Option A: Bash Installer (Recommended)
 
 The `scripts/ocp/setup-rossoctl.sh` script is the recommended way to install Rossoctl on OpenShift.
 It installs SPIRE, cert-manager, Keycloak, the operator, MCP Gateway, and the UI/backend in a
@@ -350,7 +327,7 @@ helm upgrade --install --create-namespace -n rossoctl-system \
   --set agentOAuthSecret.useServiceAccountCA=false
 ```
 
-### Option C: Install from Repository
+#### Option C: Install from Repository
 
 ```bash
 # Clone repository
@@ -393,19 +370,19 @@ helm upgrade --install rossoctl ./charts/rossoctl/ \
 kubectl get daemonsets -n zero-trust-workload-identity-manager
 ```
 
-If `Current` or `Ready` is `0`, see [Troubleshooting](#spire-daemonset-issues).
+If `Current` or `Ready` is `0`, see the [Troubleshooting Guide](../users-guides/troubleshooting.md).
 
 ---
 
-## Accessing the UI
+### Accessing the UI
 
-### Kind Cluster
+#### Kind Cluster
 
 ```bash
 open http://rossoctl-ui.localtest.me:8080
 ```
 
-### OpenShift
+#### OpenShift
 
 ```bash
 echo "https://$(kubectl get route rossoctl-ui -n rossoctl-system -o jsonpath='{.status.ingress[0].host}')"
@@ -416,7 +393,7 @@ If using self-signed certificates, accept the certificate in your browser.
 The MCP Inspector and its proxy are served on a single host, so accepting the
 Inspector's certificate also covers its proxy — no separate step is needed.
 
-### Default Credentials
+#### Default Credentials
 
 Run the following script to display all service URLs and credentials:
 
@@ -433,7 +410,7 @@ kubectl get secret keycloak-initial-admin -n keycloak \
 
 ---
 
-## Keycloak Authentication
+### Keycloak Authentication
 
 Rossoctl supports two modes for how the operator and agent workloads authenticate to Keycloak:
 
@@ -444,9 +421,9 @@ Both modes are configured automatically during install. See the **[Authenticatio
 
 ---
 
-## Verifying the Installation
+### Verifying the Installation
 
-### Identity Services
+#### Identity Services
 
 ```bash
 # SPIRE OIDC (Kind)
@@ -456,14 +433,14 @@ curl http://spire-oidc.localtest.me:8080/keys
 open http://spire-tornjak-ui.localtest.me:8080/
 ```
 
-### Keycloak (Kind)
+#### Keycloak (Kind)
 
 ```bash
 open http://keycloak.localtest.me:8080/
 # Login: see .github/scripts/local-setup/show-services.sh output for credentials
 ```
 
-### UI Functionality
+#### UI Functionality
 
 From the UI you can:
 - Import and deploy A2A agents from any framework
@@ -473,48 +450,5 @@ From the UI you can:
 
 ---
 
-## Troubleshooting
-
-### SPIRE Daemonset Issues
-
-If daemonsets show `Current=0` or `Ready=0`:
-
-```bash
-kubectl describe daemonsets -n zero-trust-workload-identity-manager spire-agent
-kubectl describe daemonsets -n zero-trust-workload-identity-manager spire-spiffe-csi-driver
-```
-
-If you see SCC (Security Context Constraint) errors:
-
-```bash
-oc adm policy add-scc-to-user privileged -z spire-agent -n zero-trust-workload-identity-manager
-kubectl rollout restart daemonsets -n zero-trust-workload-identity-manager spire-agent
-
-oc adm policy add-scc-to-user privileged -z spire-spiffe-csi-driver -n zero-trust-workload-identity-manager
-kubectl rollout restart daemonsets -n zero-trust-workload-identity-manager spire-spiffe-csi-driver
-```
-
-### OpenShift Upgrade (4.18 → 4.19)
-
-<details>
-<summary>Red Hat OpenShift Container Platform (AWS)</summary>
-
-```bash
-# Update channel
-oc patch clusterversion version --type merge -p '{"spec":{"channel":"fast-4.19"}}'
-
-# Acknowledge changes
-oc -n openshift-config patch cm admin-acks --patch '{"data":{"ack-4.18-kube-1.32-api-removals-in-4.19":"true"}}' --type=merge
-oc -n openshift-config patch cm admin-acks --patch '{"data":{"ack-4.18-boot-image-opt-out-in-4.19":"true"}}' --type=merge
-
-# Upgrade
-oc adm upgrade --to-latest=true --allow-not-recommended=true
-
-# Monitor
-oc get clusterversion
-```
-
-</details>
-
-For more troubleshooting tips, see [Troubleshooting Guide](../users-guides/troubleshooting.md).
+For troubleshooting tips, see [Troubleshooting Guide](../users-guides/troubleshooting.md).
 

@@ -1,20 +1,19 @@
 ---
-draft: true       # excluded from https://www.rossoctl.dev/
+description: Components of the Rossoctl platform.
 ---
 
-# Rossoctl Components
+# Kubernetes deployment pattern
 
-This document provides detailed information about each component of the Rossoctl platform.
+This document provides detailed information about each component of the Rossoctl platform when deployed on Kubernetes.
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Architecture Diagram](#architecture-diagram)
-- [Agent Lifecycle Operator](#agent-lifecycle-operator)
 - [MCP Gateway](#mcp-gateway)
 - [Plugins adapter](#plugins-adapter)
 - [Rossoctl UI](#rossoctl-ui)
-- [Identity & Auth Bridge](#identity--auth-bridge)
+- [RossoCortex](#rossocortex)
 - [Infrastructure Services](#infrastructure-services)
 - [Supported Agent Frameworks](#supported-agent-frameworks)
 - [Communication Protocols](#communication-protocols)
@@ -38,26 +37,26 @@ Despite the extensive variety of frameworks available for developing agent-based
 
 Rossoctl addresses this gap by enhancing existing agent frameworks with production-ready infrastructure.
 
-For a detailed architecture diagram showing component interactions and data flow, see [Technical Details](./concepts/tech-details.md).
-
 ---
 
 ## Architecture Diagram
 
 All the Rossoctl components and their deployment namespaces
 
-```shell
+<!--
+The SVG is based on this ASCII art.  To edit the SVG, edit this art and ask a tool to regenerate SVG.
+```
 ┌───────────────────────────────────────────────────────────────────────┐
 │                           Kubernetes Cluster                          │
 ├───────────────────────────────────────────────────────────────────────┤
 │                                                                       │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │                      rossoctl-system Namespace                   │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐ │  │
-│  │  │ Rossoctl UI │  │ Shipwright │  │  Ingress   │  │   Kiali    │ │  │
-│  │  │            │  │  (Builds)  │  │  Gateway   │  │            │ │  │
-│  │  │            │  │            │  │            │  │            │ │  │
-│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘ │  │
+│  │                      rossoctl-system Namespace                  │  │
+│  │  ┌─────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐│  │
+│  │  │ Rossoctl UI │  │ Shipwright │  │  Ingress   │  │   Kiali    ││  │
+│  │  │             │  │  (Builds)  │  │  Gateway   │  │            ││  │
+│  │  │             │  │            │  │            │  │            ││  │
+│  │  └─────────────┘  └────────────┘  └────────────┘  └────────────┘│  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                                                                       │
 │  ┌──────────────────────────────────────────────────────────────────┐ │
@@ -85,6 +84,10 @@ All the Rossoctl components and their deployment namespaces
 │                                                                       │
 └───────────────────────────────────────────────────────────────────────┘
 ```
+
+-->
+
+![Rossoctl architecture: components and their deployment namespaces within a Kubernetes cluster](./architecture.svg)
 
 ---
 
@@ -181,8 +184,8 @@ spec:
 
 ```yaml
 # AgentRuntime - Enrolls the workload with the rossoctl-operator.
-# The operator applies the rossoctl.io/type label and triggers
-# AuthBridge sidecar injection automatically.
+# The operator applies the rossoctl.io/type label and enrolls the
+# workload with Cortex automatically.
 apiVersion: agent.rossoctl.dev/v1alpha1
 kind: AgentRuntime
 metadata:
@@ -221,11 +224,13 @@ spec:
     image: registry.cr-system.svc.cluster.local:5000/weather-service:v0.0.1
 ```
 
-### Architecture
+### UI Architecture
 
+<!--
+The SVG is based on this ASCII art.  To edit the SVG, edit this art and ask a tool to regenerate SVG.
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    Rossoctl UI                       │
+│                    Rossoctl UI                      │
 ├─────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
 │  │   Import    │  │   Build     │  │   Deploy    │  │
@@ -239,6 +244,10 @@ spec:
 │  └─────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────┘
 ```
+
+-->
+
+![Rossoctl UI architecture: Import Agent, Build (Source), and Deploy Agent actions acting through the Kubernetes API Server](./ui-architecture.svg)
 
 ### Label Standards
 
@@ -308,14 +317,14 @@ kind: MCPServerRegistration
 metadata:
   name: weather-tool-servers
 spec:
-  toolPrefix: weather_
+  prefix: weather_
   targetRef:
     group: gateway.networking.k8s.io
     kind: HTTPRoute
     name: weather-tool-route
 ```
 
-For detailed gateway configuration, see [MCP Gateway Instructions](./gateway.md).
+For detailed gateway configuration, see [MCP Gateway Instructions](https://github.com/Kuadrant/mcp-gateway).
 
 ### MCP Tool Builds with Shipwright
 
@@ -397,7 +406,7 @@ spec:
     name: weather-tool
 ```
 
-For detailed tool deployment instructions, see [Importing a New Tool](./new-tool.md).
+For detailed tool deployment instructions, see [Importing a New Tool](../getting-started/new-tool.md).
 
 ---
 
@@ -466,99 +475,84 @@ kubectl get route rossoctl-ui -n rossoctl-system -o jsonpath='{.status.ingress[0
 
 ---
 
-## Identity & Auth Bridge
+## RossoCortex
 
-**Repository**: [rossoctl/cortex/AuthBridge](https://github.com/rossoctl/cortex/tree/main/authbridge)
+**Repository**: [rossoctl/cortex](https://github.com/rossoctl/cortex)
 
-Rossoctl provides a unified framework for identity and authorization in agentic systems, replacing static credentials with dynamic, short-lived tokens. We call this collection of assets **Auth Bridge**.
+RossoCortex is Rossoctl's data plane. It is a common interface that sits transparently between an agent and everything it interacts with — models, tools, users, and other agents — and enforces guarantees an agent cannot provide on its own. Its capabilities are delivered as plugins.
 
-**Auth Bridge** solves a critical challenge in microservices and agentic architectures: **how can workloads authenticate and communicate securely without pre-provisioned static credentials?**
+RossoCortex is framework-neutral: it works with any agent type, including black-box harnesses, and integrates through multiple paths (an SDK, agent hooks, a gateway, or an orchestration layer). It can be implemented in different ways, and is converging on **CPEX** as the plugin pipeline that hosts and chains those plugins under the covers.
 
-### Auth Bridge Components
-
-| Component | Purpose | Repository |
-|-----------|---------|------------|
-| **[AuthProxy](https://github.com/rossoctl/cortex/tree/main/authbridge)** | Inbound JWT validation (JWKS) and outbound token exchange | `AuthBridge/AuthProxy` |
-| **[SPIRE](https://spiffe.io/docs/latest/spire-about/)** | Workload identity and attestation | External |
-| **[Keycloak](https://www.keycloak.org/)** | Identity provider and access management | External |
-
-### Keycloak Client Registration (Operator-Managed)
-
-Keycloak client registration is handled by the rossoctl-operator's ClientRegistrationReconciler controller:
-
-- Reconciles AgentRuntime CRs to apply `rossoctl.io/type` labels to target workloads and trigger sidecar injection
-- Uses **SPIFFE ID** as client identifier (e.g., `spiffe://localtest.me/ns/team/sa/my-agent`)
-- Reads Keycloak admin credentials from the operator namespace (`rossoctl-system`)
-- Creates a secret in the agent namespace containing client credentials
-- Eliminates the need for admin credentials in agent namespaces
-
-### AuthProxy
-
-An Envoy-based sidecar that handles both **inbound JWT validation** and **outbound token exchange**, using an external processor (ext-proc) for token operations:
-
+<!--
+The SVG is based on this ASCII art. To edit the SVG, edit this art and ask a tool to regenerate SVG.
 ```
-                 Incoming request
-                       │
-                       ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                          WORKLOAD POD                               │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                   AuthProxy Sidecar (Envoy + Ext Proc)      │   │
-│  │                                                             │   │
-│  │  INBOUND:  Validate JWT (signature, issuer, audience via    │   │
-│  │            JWKS). Return 401 if invalid.                    │   │
-│  │  OUTBOUND: Exchange token for target audience via Keycloak  │   │
-│  │            (RFC 8693). HTTPS traffic passes through as-is.  │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                          │              │                           │
-│                    ┌─────┘              └─────┐                     │
-│                    ▼                          ▼                     │
-│           ┌──────────────┐           ┌──────────────┐              │
-│           │  Application │           │   Keycloak   │              │
-│           └──────────────┘           └──────────────┘              │
-└────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │   TARGET SERVICE    │
-                         │  (aud: auth-target) │
-                         └─────────────────────┘
+                        Agents integrate via
+        ┌──────────┬──────────┬──────────┬────────────────┐
+        │   SDK    │  Hooks   │ Gateway  │  Orchestration │
+        └────┬─────┴────┬─────┴────┬─────┴───────┬────────┘
+             └──────────┴────┬─────┴─────────────┘
+                             ▼
+        ┌───────────────────────────────────────────────┐
+        │                  RossoCortex                  │
+        │              (common interface)               │
+        │                                               │
+        │  ┌────────────┐ ┌──────┐ ┌───────┐ ┌────────┐ │
+        │  │ AuthBridge │ │ IBAC │ │ SPARC │ │Context-│ │
+        │  │ (Identity  │ │      │ │       │ │  guru  │ │
+        │  │  & Access) │ │      │ │       │ │        │ │
+        │  └────────────┘ └──────┘ └───────┘ └────────┘ │
+        │                    plugins                    │
+        ├───────────────────────────────────────────────┤
+        │        CPEX  —  plugin pipeline (emerging)     │
+        └───────────────────────────────────────────────┘
 ```
 
-**Key Features:**
+-->
 
-- **Inbound JWT Validation** — Validates token signature, expiration, and issuer using JWKS keys fetched from Keycloak. Optionally validates the audience claim. Returns HTTP 401 for missing or invalid tokens.
-- **Outbound Token Exchange** — Performs [OAuth 2.0 Token Exchange (RFC 8693)](https://datatracker.ietf.org/doc/html/rfc8693) to replace the caller's token with one scoped to the target service audience
-- **Transparent to applications** — Traffic interception via iptables; no application code changes required
-- **Configuration** — Inbound validation is configured via `ISSUER` (required) and `EXPECTED_AUDIENCE` (optional) environment variables. Outbound exchange uses `TOKEN_URL`, `CLIENT_ID`, `CLIENT_SECRET` (provided by the operator via secret), and `TARGET_AUDIENCE`.
+![RossoCortex overview: a common interface that agents reach through an SDK, hooks, a gateway, or orchestration; capabilities such as the AuthBridge identity and access-control grouping, IBAC, SPARC, and Context-guru run as plugins, hosted by the emerging CPEX pipeline](./rossocortex-overview.svg)
 
-### SPIRE (Workload Identity)
+### AuthBridge (Identity & Access Control)
 
-[SPIRE](https://spiffe.io/docs/latest/spire-about/) provides cryptographic workload identities using the SPIFFE standard.
+**AuthBridge** is RossoCortex's Identity and Access Control capability grouping. It gives agents and tools a trusted identity and enforces authentication, secure delegation, and access control at every hop, replacing static credentials with dynamic, short-lived, audience-scoped tokens. It can be enabled or disabled.
 
-| Component | Purpose |
-|-----------|---------|
-| **SPIRE Server** | Issues SVIDs (SPIFFE Verifiable Identity Documents) |
-| **SPIRE Agent** | Node-level agent that attests workloads |
-| **CSI Driver** | Mounts SVID certificates into pods |
+| Capability | Description |
+|------------|-------------|
+| **Trusted Identity** | Cryptographic workload identities issued by SPIFFE/SPIRE, backed by attestation |
+| **Authentication** | Validation of inbound tokens — signature, issuer, and audience |
+| **Secure Delegation** | OAuth 2.0 Token Exchange ([RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693)) with per-target audience scoping |
+| **Client Registration** | Automated Keycloak client provisioning for each workload, keyed by its SPIFFE identity |
+| **Access Control** | Policy-driven allow/deny decisions on agent and tool actions |
 
-**Identity Format**: `spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>`
+### Plugin pipeline
 
-### Keycloak (Access Management)
+RossoCortex's plugins run in a pipeline. It is converging on **[CPEX](https://github.com/contextforge-org/cpex)** — policy orchestration that composes PDP verdicts (Cedar, OPA) for agentic entities through a declarative policy language — as that pipeline. The capabilities above stay constant regardless of which pipeline hosts the plugins.
 
-[Keycloak](https://www.keycloak.org/) manages user authentication and OAuth/OIDC flows.
+### Related capabilities
 
-| Feature | Description |
-|---------|-------------|
-| **User Management** | Create and manage Rossoctl users |
-| **Client Registration** | OAuth clients for agents and UI (automated registration via rossoctl-operator's ClientRegistrationReconciler) |
-| **Token Exchange** | Exchange tokens between audiences ([RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693)) |
-| **SSO** | Single sign-on across Rossoctl components |
+Beyond the AuthBridge identity and access-control grouping, other RossoCortex capabilities are delivered as sibling plugins, each documented on its own page:
+
+- **[IBAC](./ibac-plugin.md)** — Intent-Based Access Control; denies outbound actions that do not match the user's most-recent declared intent.
+- **[SPARC](./sparc-plugin.md)** — pre-tool reflection; catches hallucinated or ungrounded tool calls before they execute.
+- **[Context-guru](./contextguru.md)** — context compaction; shrinks an agent's tool-output context before it reaches the model.
+- **Praxis** — emerging.
+
+### Foundation
+
+AuthBridge builds on two foundational services shared across RossoCortex:
+
+| Service | Role |
+|---------|------|
+| **[SPIRE](https://spiffe.io/docs/latest/spire-about/)** | Issues cryptographic workload identities (SVIDs) via node-level attestation. Identity format: `spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>` |
+| **[Keycloak](https://www.keycloak.org/)** | Identity provider for user authentication, OAuth/OIDC flows, token exchange, and SSO across Rossoctl components |
+
+Client registration with Keycloak is automated per workload, keyed by the workload's SPIFFE identity, so agent namespaces never need admin credentials. SPIRE identities can be inspected through the Tornjak UI (`http://spire-tornjak-ui.localtest.me:8080/`).
 
 ### Authorization Pattern
 
 The Agent and Tool Authorization Pattern replaces static credentials with dynamic SPIRE-managed identities, enforcing least privilege and continuous authentication:
 
+<!--
+The SVG is based on this ASCII art.  To edit the SVG, edit this art and ask a tool to regenerate SVG.
 ```
 ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
 │   User   │────▶│ Keycloak │────▶│  Agent   │────▶│   Tool   │
@@ -571,6 +565,10 @@ The Agent and Tool Authorization Pattern replaces static credentials with dynami
                  └─────────────────────────────────────────┘
 ```
 
+-->
+
+![Authorization pattern: User to Keycloak to Agent to Tool, each backed by short-lived identities from the SPIRE Server](./authorization-pattern.svg)
+
 1. **User authenticates** with Keycloak, receives access token
 2. **Agent receives** user context via delegated token
 3. **Agent identity** is attested by SPIRE
@@ -581,16 +579,9 @@ The Agent and Tool Authorization Pattern replaces static credentials with dynami
 - **No Static Secrets** - Credentials are dynamically generated at pod startup
 - **Short-Lived Tokens** - JWT tokens expire and must be refreshed
 - **Audience Scoping** - Tokens are scoped to specific audiences, preventing reuse
-- **Transparent to Application** - Token exchange is handled by the sidecar
+- **Transparent to Application** - Token exchange happens outside application code; no changes required
 
-For detailed overview of Identity and Authorization Patterns, see the [Identity Guide](./identity-guide.md).
-
-### Tornjak (SPIRE Management UI)
-
-```bash
-# UI
-open http://spire-tornjak-ui.localtest.me:8080/
-```
+For a detailed overview of Identity and Authorization Patterns, see the [Identity Guide](./identity-guide.md).
 
 ---
 
@@ -626,6 +617,7 @@ The Ingress Gateway routes external HTTP requests to internal services using the
 
 LLM observability and tracing for agent interactions. Phoenix is **disabled by default** and can be enabled via `components.phoenix.enabled: true` in both the `rossoctl-deps` and `rossoctl` charts. Requires `components.otel.enabled: true`.
 
+<!--
 ### Skillberry Store (Skill Registry) -- Optional
 
 In-cluster [skillberry-store](https://github.com/skillberry-ai/skillberry-store) skill registry. **Disabled by default**; enabled via `components.skillberryStore.enabled: true` in the `rossoctl` chart (the Kind setup script's `--with-skills` flag sets it automatically). When enabled, the store runs as a single-replica Deployment (REST API on `8000`, web UI on `8002`, filesystem storage on a PVC at `/data`) and the chart seeds the `rossoctl-skill-autosync-config` ConfigMap so the backend autosync loop polls it — no external registry or `--skill-registry-allowed-hosts` allow-listing required. Behavior is additionally gated by `featureFlags.externalSkills`. The store UI is exposed via an HTTPRoute at `http://skillberry-store.<domain>:8080`, and the Rossoctl UI's "Manage in Skillberry Store" links point there (the ConfigMap also carries a `store-ui-url` the backend surfaces, since the in-cluster `registry-url` is server-side only and not browser-reachable).
@@ -633,6 +625,7 @@ In-cluster [skillberry-store](https://github.com/skillberry-ai/skillberry-store)
 Because the store serves its UI with the Vite dev server (which rejects unknown `Host` headers), the chart sets `VITE_ALLOWED_HOSTS` on the store pod to the gateway host (derived from `skillberryStore.allowedHosts`, defaulting to `skillberry-store.<domain>`) so the gateway URL works. This requires a store image with `VITE_ALLOWED_HOSTS` support (≥ 0.2.0).
 
 The image defaults to `ghcr.io/skillberry-ai/skillberry-store:0.2.0` and is overridable via `skillberryStore.image.tag` / `skillberryStore.image.repository` (Helm) or the `SKILLBERRY_STORE_TAG` / `SKILLBERRY_STORE_IMAGE` env vars (Kind setup script). Additional store environment variables can be injected via `skillberryStore.extraEnv` (a list of standard `core/v1` `EnvVar` entries, so both literal `value` and `valueFrom` secret/configMap references are supported); these are appended after the chart-managed `SBS_*` / `ENABLE_UI` variables. See [docs/skills.md](skills.md) for usage.
+-->
 
 ---
 
@@ -697,10 +690,8 @@ POST /mcp    # MCP JSON-RPC messages
 
 ## Related Documentation
 
-- [Installation Guide](./install.md)
-- [Demo Documentation](./demos/README.md)
-- [Technical Details](./concepts/tech-details.md)
-- [Identity, Security, and Auth Bridge](./identity-guide.md)
-- [MCP Gateway Instructions](./gateway.md)
-- [New Agent Guide](./new-agent.md)
-- [New Tool Guide](./new-tool.md)
+- [Installation Guide](../getting-started/install.md)
+- [RossoCortex Identity Guide](./identity-guide.md)
+- [MCP Gateway Instructions](https://github.com/Kuadrant/mcp-gateway)
+- [New Agent Guide](../getting-started/new-agent.md)
+- [New Tool Guide](../getting-started/new-tool.md)
