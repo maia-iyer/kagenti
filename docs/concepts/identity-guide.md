@@ -18,6 +18,7 @@ In practice, the Authorization Pattern within the Agentic Platform enables:
 ### 📚 Related Documentation
 
 - **[Rossoctl Identity Overview](../2025-10.Rossoctl-Identity.pdf)** - High-level architectural concepts
+- **[Authentication Guide](../users-guides/authentication.md)** - Client secret vs. SPIFFE auth modes for operator and agent/tool workloads
 - **[AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbridge)** - Complete end-to-end installation and demo with SPIFFE, Client Registration, and AuthProxy
 - **[Token Exchange Deep Dive](https://github.com/rossoctl/rossoctl/blob/main/rossoctl/examples/identity/token_exchange.md)** - Detailed OAuth2 token exchange flows
 - **[Client Registration Examples](https://github.com/rossoctl/rossoctl/blob/main/rossoctl/examples/identity/keycloak_token_exchange/README.md)** - Practical integration examples
@@ -172,7 +173,7 @@ kubectl get secret keycloak-initial-admin -n keycloak -o go-template=\
 
 Keycloak client registration is handled automatically when "☑ Secure with AuthBridge" is selected during deployment.  This is fully automatic and requires no manual intervention or init containers.
 
-Internally,  registration is handled by the rossoctl-operator's `ClientRegistrationReconciler`.
+Internally, registration is handled by the rossoctl-operator's `ClientRegistrationReconciler`.
 
 ---
 
@@ -191,53 +192,53 @@ The [AuthBridge Component](https://github.com/rossoctl/cortex/tree/main/authbrid
 
 #### AuthBridge Architecture
 
-```
+1. Operator reconciles AgentRuntime CRs and labels target workloads
+2. Operator registers client with Keycloak
+3. Agent gets token from Keycloak
+4. Agent sends request to target with token
+5. Envoy+ext-proc intercepts: validates token signature, expiration, issuer via JWKS (returns 401 if invalid), then exchanges token for target audience
+6. Target receives request with exchanged token and validates audience
+
+![AuthBridge Architecture Flow](./authbridge-architecture.svg)
+
+<!--
+Original ASCII art, kept for reference:
+
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │  1. Operator reconciles AgentRuntime CRs and labels target workloads            │
-│  2. Operator registers client with Keycloak (using admin credentials from       │
-│     operator namespace) and creates credentials secret in agent namespace       │
-│  3. (removed)                                                                   │
-│  4. Agent gets token from Keycloak using credentials from secret                │
-│  5. Agent sends request to target with token                                    │
-│  6. Envoy+ext-proc intercepts: validates token signature, expiration, issuer    │
+│  2. Operator registers client with Keycloak                                     │
+│  3. Agent gets token from Keycloak                                              │
+│  4. Agent sends request to target with token                                    │
+│  5. Envoy+ext-proc intercepts: validates token signature, expiration, issuer    │
 │     via JWKS (returns 401 if invalid), then exchanges token for target audience │
-│  7. Target receives request with exchanged token and validates audience         │
+│  6. Target receives request with exchanged token and validates audience         │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-  Operator                   SPIRE Agent           Keycloak              Target
+  Operator                   RossoCortex           Keycloak              Target
        │                         │                     │                    │
        │ 1. Watch workload       │                     │                    │
        │ 2. Register client      │                     │                    │
        ├─────────────────────────┼────────────────────►│                    │
        │                         │                     │                    │
-       │ Create credentials      │                     │                    │
-       │ secret in agent ns      │                     │                    │
-       │                         │                     │                    │
-       │              ┌─────────┐│  3. Get SVID        │                    │
-       │              │ SPIFFE  ││◄────────────────────┤                    │
-       │              │ Helper  ││                     │                    │
-       │              └─────────┘│                     │                    │
-       │                    │    │                     │                    │
-       │              ┌─────────┐│                     │                    │
-       │              │  Agent  ││  4. Get token       │                    │
-       │              │         ││────────────────────►│                    │
+       │              ┌─────────┐│  3. Get token       │                    │
+       │              │  Agent  ││────────────────────►│                    │
        │              │         ││◄────────────────────│                    │
        │              │         ││  (aud: agent's ID)  │                    │
        │              │         ││                     │                    │
-       │              │         ││  5. Request + token │                    │
+       │              │         ││  4. Request + token │                    │
        │              │         ││─────────────────────┼───────────────────►│
        │              └─────────┘│                     │                    │
        │                    │    │                     │                    │
        │         ┌──────────────┐│                     │                    │
-       │         │ Envoy+ext-pr ││  6. Validate &      │                    │
+       │         │ Envoy+ext-pr ││  5. Validate &      │                    │
        │         │              ││     Exchange token  │                    │
        │         │              ││────────────────────►│                    │
        │         │              ││◄────────────────────│                    │
        │         │              ││  (aud: target)      │                    │
        │         │              ││─────────────────────┼───────────────────►│
-       │         └──────────────┘│                     │  7. Validate aud   │
+       │         └──────────────┘│                     │  6. Validate aud   │
        │                         │                     │       "authorized" │
-```
+-->
 
 #### AuthBridge Components
 
@@ -276,37 +277,11 @@ For complete documentation, see:
 - (optional) MCP Gateway: http://mcp-gateway.localtest.me:8080/mcp
 
 #### Default Credentials
+
+> Applies only to local/dev deployments where Rossoctl provisions Keycloak for you (e.g. Kind). Production deployments should not rely on default credentials.
+
 ```yaml
 # Keycloak Admin — run ./.github/scripts/local-setup/show-services.sh for actual credentials
-```
-
-#### Common SPIFFE IDs
-
-Using local kind:
-
-```bash
-# Agents
-spiffe://localtest.me/ns/team/sa/slack-researcher
-spiffe://localtest.me/ns/team/sa/weather-service
-spiffe://localtest.me/ns/team/sa/github-issue-agent
-
-# Tools
-spiffe://localtest.me/ns/team/sa/slack-tool
-spiffe://localtest.me/ns/team/sa/weather-tool
-spiffe://localtest.me/ns/team/sa/github-tool
-
-# Infrastructure
-spiffe://localtest.me/ns/gateway-system/sa/mcp-gateway
-spiffe://localtest.me/ns/rossoctl-system/sa/operator
-```
-
-Using OpenShift:
-
-```bash
-# Agents
-spiffe://apps.cluster-swkz5.dynamic.redhatworkshops.io/ns/team/sa/slack-researcher
-spiffe://apps.cluster-swkz5.dynamic.redhatworkshops.io/ns/team/sa/weather-service
-spiffe://apps.cluster-swkz5.dynamic.redhatworkshops.io/ns/team/sa/github-issue-agent
 ```
 
 #### Token Exchange Endpoints
