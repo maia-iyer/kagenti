@@ -75,7 +75,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: bootstrap
-        image: "{{ index .Values "operator-chart" "spiffe" "operatorAuth" "bootstrapImage" }}:{{ index .Values "operator-chart" "spiffe" "operatorAuth" "bootstrapImageTag" }}"
+        image: "{{ .Values.operatorSpiffeBootstrap.image }}:{{ .Values.operatorSpiffeBootstrap.tag }}"
         imagePullPolicy: IfNotPresent
         env:
         - name: KEYCLOAK_URL
