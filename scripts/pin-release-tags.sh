@@ -55,6 +55,7 @@ Images pinned (charts/rossoctl/values.yaml):
   - agentOAuthSecret.tag
   - apiOAuthSecret.tag
   - mlflowOAuthSecret.tag
+  - operator-chart.spiffe.operatorAuth.bootstrapImageTag
 
 Images pinned (charts/rossoctl-deps/values.yaml):
   - spiffeIdp.image.tag
@@ -139,6 +140,7 @@ PINNABLE_IMAGES=(
     "$ROSSOCTL_VALUES|.agentOAuthSecret.tag|agent-oauth-secret"
     "$ROSSOCTL_VALUES|.apiOAuthSecret.tag|api-oauth-secret"
     "$ROSSOCTL_VALUES|.mlflowOAuthSecret.tag|mlflow-oauth-secret"
+    "$ROSSOCTL_VALUES|.[\"operator-chart\"].spiffe.operatorAuth.bootstrapImageTag|operator-spiffe-bootstrap"
     "$ROSSOCTL_DEPS_VALUES|.spiffeIdp.image.tag|spiffe-idp-setup"
 )
 
