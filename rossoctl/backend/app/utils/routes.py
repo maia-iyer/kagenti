@@ -165,6 +165,34 @@ def create_httproute(
             raise
 
 
+def resolve_openshift_target_port(
+    kube: KubernetesService,
+    service_name: str,
+    namespace: str,
+    service_port: int,
+):
+    """Resolve the value an OpenShift Route should use for spec.port.targetPort.
+
+    OpenShift's router matches a Route's targetPort against the *name* of the
+    backing Service port whenever that port is named; a numeric value equal to
+    the Service's `port` (rather than its container `targetPort`) fails to
+    resolve and the router returns 503. Return the port name when the matching
+    Service port is named, otherwise fall back to the numeric port.
+    """
+    try:
+        service = kube.get_service(namespace=namespace, name=service_name)
+        for sp in service.get("spec", {}).get("ports", []) or []:
+            if sp.get("port") == service_port and sp.get("name"):
+                return sp["name"]
+    except ApiException:
+        logger.warning(
+            "Could not look up Service %s in %s to resolve route targetPort; using numeric port",
+            sanitize_log(service_name),
+            sanitize_log(namespace),
+        )
+    return service_port
+
+
 def create_openshift_route(
     kube: KubernetesService,
     name: str,
@@ -185,6 +213,7 @@ def create_openshift_route(
     name = sanitize_log(name)
     namespace = sanitize_log(namespace)
     service_name = sanitize_log(service_name)
+    target_port = resolve_openshift_target_port(kube, service_name, namespace, service_port)
     route_manifest = {
         "apiVersion": "route.openshift.io/v1",
         "kind": "Route",
@@ -198,7 +227,7 @@ def create_openshift_route(
         "spec": {
             "path": "/",
             "port": {
-                "targetPort": service_port,
+                "targetPort": target_port,
             },
             "to": {
                 "kind": "Service",
